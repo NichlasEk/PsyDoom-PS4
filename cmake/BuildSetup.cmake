@@ -11,7 +11,9 @@ macro(detect_compiler)
 endmacro()
 
 macro(detect_platform)
-    if (WIN32)
+    if (PSYDOOM_PS4)
+        set(PLATFORM_PS4 TRUE)
+    elseif (WIN32)
         set(PLATFORM_WINDOWS TRUE)
 
         if ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Win64")

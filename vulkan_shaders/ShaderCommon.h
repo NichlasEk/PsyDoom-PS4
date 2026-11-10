@@ -11,8 +11,13 @@
 //                  system of the original PSX framebuffer, which is useful for things like sky rendering.
 //  invDrawRes      1 / drawResolution - useful for converting from 'gl_FragCoord' to NDC coordinates
 //----------------------------------------------------------------------------------------------------------------------
+#ifdef PSYDOOM_PS4_UBO
+#define UNIFORM_LAYOUT layout(std140, set = 0, binding = 8)
+#else
+#define UNIFORM_LAYOUT layout(push_constant)
+#endif
 #define DECLARE_UNIFORMS()\
-    layout(push_constant) uniform Uniforms {   \
+    UNIFORM_LAYOUT uniform Uniforms {   \
         mat4    mvpMatrix;      \
         vec2    ndcToPsxScale;  \
         vec2    psxNdcOffset;   \

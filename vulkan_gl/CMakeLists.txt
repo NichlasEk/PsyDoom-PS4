@@ -108,3 +108,8 @@ target_link_libraries(${VULKAN_GL_TGT_NAME}
 )
 
 target_include_directories(${VULKAN_GL_TGT_NAME} PUBLIC ${INCLUDE_PATHS})
+
+if(PSYDOOM_PS4)
+ target_sources(${VULKAN_GL_TGT_NAME} PRIVATE "${PROJECT_SOURCE_DIR}/ps4/vulkan/videoout_surface.cpp")
+ target_include_directories(${VULKAN_GL_TGT_NAME} PUBLIC "${PROJECT_SOURCE_DIR}/ps4/vulkan")
+endif()

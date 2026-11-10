@@ -1,0 +1,3 @@
+#ifndef VK_DEVICE_ENTRYPOINTS_H
+#define VK_DEVICE_ENTRYPOINTS_H
+#endif

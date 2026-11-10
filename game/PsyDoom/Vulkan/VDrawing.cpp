@@ -24,6 +24,7 @@
 #include "VPipelines.h"
 #include "VRenderer.h"
 #include "VTypes.h"
+#include "VPs4Uniforms.h"
 #include "VVertexBufferSet.h"
 
 BEGIN_NAMESPACE(VDrawing)
@@ -54,6 +55,9 @@ static uint32_t gCurRingbufferIdx;
 // Binds the PSX VRAM texture to it's combined image sampler in binding 0.
 static vgl::DescriptorPool  gDescriptorPool;
 static vgl::DescriptorSet*  gpDescriptorSet;
+#if defined(__PS4__)
+static vgl::BaseTexture* gpPs4Vram;
+#endif
 
 // Vertex buffers: for the 'draw' subpass (VVertex_Draw)
 static VVertexBufferSet gVertexBuffers_Draw;
@@ -105,12 +109,19 @@ static void recordCmdBuffer(vgl::CmdBufferRecorder& cmdRec) noexcept {
 
                 // Do we need to bind the draw descriptor set as well, after setting the pipeline?
                 if (bNeedToBindDescriptorSet) {
+#if !defined(__PS4__)
                     cmdRec.bindDescriptorSet(*gpDescriptorSet, pipeline, 0, 0, nullptr);
+#endif
                     bNeedToBindDescriptorSet = false;
                 }
             }   break;
 
             case DrawCmdType::SetUniforms: {
+#if defined(__PS4__)
+                bindPs4Uniforms(cmdRec, VPipelines::gPipelines[0], *gDescriptorPool.getDevice(),
+                    VPipelines::gDescSetLayout_draw, &gFrameUniforms[drawCmd.arg1],
+                    sizeof(VShaderUniforms_Draw), VPipelines::gSampler_draw, *gpPs4Vram);
+#else
                 cmdRec.pushConstants(
                     VPipelines::gPipelineLayout_draw,
                     VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -118,10 +129,19 @@ static void recordCmdBuffer(vgl::CmdBufferRecorder& cmdRec) noexcept {
                     sizeof(VShaderUniforms_Draw),
                     &gFrameUniforms[drawCmd.arg1]
                 );
+#endif
             }   break;
 
             case DrawCmdType::Draw: {
+#if defined(__PS4__)
+                // The PS4 fetch shader supports a zero firstVertex. Rebase the
+                // vertex binding instead; these shaders use only attributes.
+                cmdRec.bindVertexBuffer(*gVertexBuffers_Draw.pCurBuffer, 0,
+                    uint64_t(drawCmd.arg2) * sizeof(VVertex_Draw));
+                cmdRec.draw(drawCmd.arg1, 0);
+#else
                 cmdRec.draw(drawCmd.arg1, drawCmd.arg2);
+#endif
             }   break;
         }
     }
@@ -131,6 +151,9 @@ static void recordCmdBuffer(vgl::CmdBufferRecorder& cmdRec) noexcept {
 // Initializes the drawing module and allocates draw vertex buffers etc.
 //------------------------------------------------------------------------------------------------------------------------------------------
 void init(vgl::LogicalDevice& device, vgl::BaseTexture& vramTex) noexcept {
+#if defined(__PS4__)
+    gpPs4Vram = &vramTex;
+#endif
     // Create the descriptor pool and descriptor set used for rendering.
     // Only using a single descriptor set which is bound to the PSX VRAM texture.
     {
@@ -139,7 +162,7 @@ void init(vgl::LogicalDevice& device, vgl::BaseTexture& vramTex) noexcept {
         poolResources[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         poolResources[0].descriptorCount = vgl::Defines::RINGBUFFER_SIZE;
 
-        if (!gDescriptorPool.init(device, { poolResources[0] }, 1))
+        if (!gDescriptorPool.init(device, { poolResources[0], {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1} }, 1))
             FatalErrors::raise("VDrawing: Failed to create a Vulkan descriptor pool!");
 
         // Make the descriptor set and bind the PSX VRAM texture and sampler to slot 0.

@@ -11,7 +11,12 @@
 layout(constant_id = 0) const bool USE_PSX_16_BIT_SHADING = true;
 
 // Controls how how much of each texture is mixed in
-layout(push_constant) uniform Uniforms {
+#ifdef PSYDOOM_PS4_UBO
+layout(std140, set = 0, binding = 8)
+#else
+layout(push_constant)
+#endif
+uniform Uniforms {
     float   lerpAmount;
 } uniforms;
 

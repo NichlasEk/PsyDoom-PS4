@@ -1,0 +1,21 @@
+#pragma once
+
+#include_next <functional>
+
+#if __cplusplus >= 202002L
+#include <tuple>
+#include <utility>
+
+namespace std {
+
+template <class Function, class... BoundArgs>
+constexpr auto bind_front(Function&& function, BoundArgs&&... bound_args) {
+    return [function = std::forward<Function>(function),
+            ... bound_args = std::forward<BoundArgs>(bound_args)](auto&&... call_args) mutable
+               -> decltype(auto) {
+        return std::invoke(function, bound_args..., std::forward<decltype(call_args)>(call_args)...);
+    };
+}
+
+} // namespace std
+#endif

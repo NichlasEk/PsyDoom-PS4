@@ -83,6 +83,9 @@ void uninstallFatalErrorHandler() noexcept {
 // The Path is returned with a trailing path separator, so can be combined with a file name without any other modifications.
 //------------------------------------------------------------------------------------------------------------------------------------------
 std::string getOrCreateUserDataFolder() noexcept {
+    #ifdef __PS4__
+    return "/data/psydoom/"; // Bootstrap creates this directory before game initialization.
+    #else
     char* const pCfgFilePath = SDL_GetPrefPath(SAVE_FILE_ORG, SAVE_FILE_PRODUCT);
 
     if (!pCfgFilePath) {
@@ -92,6 +95,7 @@ std::string getOrCreateUserDataFolder() noexcept {
     std::string path = pCfgFilePath;
     SDL_free(pCfgFilePath);
     return path;
+    #endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

@@ -1,0 +1,703 @@
+diff --git a/Makefile b/Makefile
+index 21c97d3..af67963 100644
+--- a/Makefile
++++ b/Makefile
+@@ -229,8 +229,7 @@ UTIL_FORMAT_SRCS = $(wildcard src/util/format/*.c)
+ BLAKE3_SRCS = \
+ 	src/util/blake3/blake3.c \
+ 	src/util/blake3/blake3_dispatch.c \
+-	src/util/blake3/blake3_portable.c \
+-	src/util/blake3/blake3_neon.c
++	src/util/blake3/blake3_portable.c
+ 
+ # C11 threads compat (POSIX implementation)
+ C11_THREADS_SRCS = src/c11/impl/threads_posix.c src/c11/impl/time.c
+@@ -313,3 +312,5 @@ install: all
+ 	install -d $(DESTDIR)$(BINDIR)
+ 	install -m 755 $(PSBC) $(DESTDIR)$(BINDIR)/
+ endif
++
++libpsbc/psbc_compile.o cmd/psbc/main.o: libpsbc/psbc_compile.h
+diff --git a/Makefile.orbis b/Makefile.orbis
+index 8c44223..0d1d405 100644
+--- a/Makefile.orbis
++++ b/Makefile.orbis
+@@ -36,12 +36,11 @@ AMD_COMMON_NIR_OBJS := $(AMD_COMMON_NIR_SRCS:.c=.orbis.o)
+ RADV_OBJS := $(RADV_SRCS:.c=.orbis.o)
+ RADV_NIR_OBJS := $(RADV_NIR_SRCS:.c=.orbis.o)
+ UTIL_SRCS := $(filter-out \
+-	src/util/log.c \
+ 	src/util/mesa_cache_db.c \
+ 	src/util/mesa_cache_db_multipart.c \
+ 	,$(UTIL_SRCS))
+ UTIL_OBJS := $(patsubst %.c,%.orbis.o,$(filter %.c,$(UTIL_SRCS))) $(patsubst %.cpp,%.orbis.cpp.o,$(filter %.cpp,$(UTIL_SRCS)))
+-UTIL_FORMAT_SRCS := $(filter-out src/util/format/u_format_s3tc.c,$(UTIL_FORMAT_SRCS))
++# Build the real format implementation; the format table references it.
+ UTIL_FORMAT_OBJS := $(UTIL_FORMAT_SRCS:.c=.orbis.o)
+ COMPILER_COMMON_OBJS := $(COMPILER_COMMON_SRCS:.c=.orbis.o)
+ BLAKE3_SRCS := $(filter-out src/util/blake3/blake3_neon.c,$(BLAKE3_SRCS))
+@@ -90,3 +89,9 @@ clean:
+ 	find . -name '*.orbis.o' -delete
+ 	find . -name '*.orbis.cpp.o' -delete
+ 	rm -f $(LIBPSBC)
++
++# This build includes the portable BLAKE3 implementation, not SIMD objects.
++src/util/blake3/blake3_dispatch.orbis.o: CFLAGS += -DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512 -DBLAKE3_USE_NEON=0
++src/util/blake3/blake3_dispatch.orbis.o: Makefile.orbis
++
++libpsbc/psbc_compile.orbis.o: libpsbc/psbc_compile.h
+diff --git a/libpsbc/psbc_compile.c b/libpsbc/psbc_compile.c
+index bacbc6a..7370b35 100644
+--- a/libpsbc/psbc_compile.c
++++ b/libpsbc/psbc_compile.c
+@@ -225,6 +225,8 @@ static PsbcResult buildshaderbinary(
+     const uint32_t* code, uint32_t code_dw,
+     uint8_t** out_data, size_t* out_size
+ ) {
++    const uint64_t inputmask = ctx->nir->info.inputs_read &
++        (ctx->stage == MESA_SHADER_FRAGMENT ? ~VARYING_BIT_POS : ~0ULL);
+     uint32_t codesize = code_dw * sizeof(uint32_t);
+     if (ctx->nir->info.stage == MESA_SHADER_VERTEX &&
+         ctx->rinfo->vs.has_prolog) {
+@@ -240,8 +242,8 @@ static PsbcResult buildshaderbinary(
+      * jump instruction to a fetch "shader" */
+     if (ctx->nir->info.stage == MESA_SHADER_VERTEX &&
+         ctx->rinfo->vs.has_prolog) {
+-        /* s_swappc_b64 s[0:1], s[0:1] */
+-        newcode[0] = 0xbe802100;
++        /* Return in s[0:1]; fetch address comes from the declared prolog pair. */
++        newcode[0] = 0xbe802100 | ctx->rargs->ac.args[ctx->rargs->prolog_inputs.arg_index].offset;
+         nextcode += 1;
+     }
+ 
+@@ -281,25 +283,25 @@ static PsbcResult buildshaderbinary(
+     switch (ctx->stage) {
+     case MESA_SHADER_VERTEX:
+     case MESA_SHADER_TESS_EVAL:  /* DS outputs vertices like VS */
+-        shspecificsize += util_bitcount64(ctx->nir->info.inputs_read) *
++        shspecificsize += util_bitcount64(inputmask) *
+                           sizeof(GnmVertexInputSemantic);
+         shspecificsize +=
+             outputswritten * sizeof(GnmVertexExportSemantic);
+         break;
+     case MESA_SHADER_FRAGMENT:
+-        shspecificsize += util_bitcount64(ctx->nir->info.inputs_read) *
++        shspecificsize += util_bitcount64(inputmask) *
+                           sizeof(GnmPixelInputSemantic);
+         break;
+     case MESA_SHADER_GEOMETRY:
+         /* GS has input/export semantics like VS */
+-        shspecificsize += util_bitcount64(ctx->nir->info.inputs_read) *
++        shspecificsize += util_bitcount64(inputmask) *
+                           sizeof(GnmVertexInputSemantic);
+         shspecificsize +=
+             outputswritten * sizeof(GnmVertexExportSemantic);
+         break;
+     case MESA_SHADER_TESS_CTRL:
+         /* HS has input semantics (from VS outputs) but no export semantics */
+-        shspecificsize += util_bitcount64(ctx->nir->info.inputs_read) *
++        shspecificsize += util_bitcount64(inputmask) *
+                           sizeof(GnmVertexInputSemantic);
+         break;
+     default:
+@@ -433,7 +435,7 @@ static PsbcResult buildshaderbinary(
+                         clip_dist_mask,
+                 },
+             .numinputsemantics =
+-                util_bitcount64(ctx->nir->info.inputs_read),
++                util_bitcount64(inputmask),
+             .numexportsemantics = outputswritten,
+         };
+         memcpy(buf + offset, &vsh, sizeof(vsh));
+@@ -483,7 +485,7 @@ static PsbcResult buildshaderbinary(
+                     ),
+                 },
+             .numinputsemantics =
+-                util_bitcount64(ctx->nir->info.inputs_read),
++                util_bitcount64(inputmask),
+         };
+         memcpy(buf + offset, &psh, sizeof(psh));
+         offset += sizeof(psh);
+@@ -549,7 +551,7 @@ static PsbcResult buildshaderbinary(
+                         S_028B90_ENABLE(ctx->rinfo->gs.invocations > 0),
+                 },
+             .numinputsemantics =
+-                util_bitcount64(ctx->nir->info.inputs_read),
++                util_bitcount64(inputmask),
+             .numexportsemantics = outputswritten,
+         };
+         memcpy(buf + offset, &gsh, sizeof(gsh));
+@@ -609,7 +611,7 @@ static PsbcResult buildshaderbinary(
+                     .vgthosmintesslevel = 1,
+                 },
+             .numinputsemantics =
+-                util_bitcount64(ctx->nir->info.inputs_read),
++                util_bitcount64(inputmask),
+         };
+         memcpy(buf + offset, &hsh, sizeof(hsh));
+         offset += sizeof(hsh);
+@@ -633,7 +635,7 @@ static PsbcResult buildshaderbinary(
+                     .spishaderpgmrsrc2es = ctx->config->rsrc2,
+                 },
+             .numinputsemantics =
+-                util_bitcount64(ctx->nir->info.inputs_read),
++                util_bitcount64(inputmask),
+             .numexportsemantics = outputswritten,
+         };
+         memcpy(buf + offset, &esh, sizeof(esh));
+@@ -658,7 +660,7 @@ static PsbcResult buildshaderbinary(
+                     .spishaderpgmrsrc2ls = ctx->config->rsrc2,
+                 },
+             .numinputsemantics =
+-                util_bitcount64(ctx->nir->info.inputs_read),
++                util_bitcount64(inputmask),
+             .numexportsemantics = outputswritten,
+         };
+         memcpy(buf + offset, &lsh, sizeof(lsh));
+@@ -709,8 +711,8 @@ static PsbcResult buildshaderbinary(
+     switch (ctx->stage) {
+     case MESA_SHADER_VERTEX:
+     case MESA_SHADER_TESS_EVAL:  /* DS uses same semantics as VS */
+-        for (uint32_t i = 0;
+-             i < util_bitcount64(ctx->nir->info.inputs_read); i += 1) {
++        u_foreach_bit64(slot, inputmask) {
++            const unsigned i = slot - VERT_ATTRIB_GENERIC0;
+             const GnmVertexInputSemantic input = {
+                 .semantic = i,
+                 .vgpr =
+@@ -725,30 +727,39 @@ static PsbcResult buildshaderbinary(
+             memcpy(buf + offset, &input, sizeof(input));
+             offset += sizeof(input);
+         }
+-        for (uint32_t i = 0; i < outputswritten; i += 1) {
++        u_foreach_bit64(slot, ctx->nir->info.outputs_written & ~VARYING_BIT_POS) {
+             const GnmVertexExportSemantic out = {
+-                .semantic = 15 + i,
+-                .outindex = i,
++                .semantic = slot,
++                .outindex = ctx->rinfo->outinfo.vs_output_param_offset[slot],
+                 .exportf16 = 0,
+             };
+             memcpy(buf + offset, &out, sizeof(out));
+             offset += sizeof(out);
+         }
+         break;
+-    case MESA_SHADER_FRAGMENT:
+-        for (uint32_t i = 0;
+-             i < util_bitcount64(ctx->nir->info.inputs_read); i += 1) {
+-            const GnmPixelInputSemantic input = {
+-                .semantic = 15 + i,
+-            };
+-            memcpy(buf + offset, &input, sizeof(input));
+-            offset += sizeof(input);
++    case MESA_SHADER_FRAGMENT: {
++        /* Preserve lowered interpolation slots; locations need not be dense. */
++        GnmPixelInputSemantic inputs[32] = {0};
++        nir_foreach_function_impl(impl, ctx->nir) {
++            nir_foreach_block(block, impl) {
++                nir_foreach_instr(instr, block) {
++                    if (instr->type != nir_instr_type_intrinsic) continue;
++                    nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++                    if (intr->intrinsic != nir_intrinsic_load_interpolated_input &&
++                        intr->intrinsic != nir_intrinsic_load_input) continue;
++                    unsigned base = nir_intrinsic_base(intr);
++                    if (base < 32) inputs[base].semantic = nir_intrinsic_io_semantics(intr).location;
++                }
++            }
++        }
++        memcpy(buf + offset, inputs, util_bitcount64(inputmask) * sizeof(inputs[0]));
++        offset += util_bitcount64(inputmask) * sizeof(inputs[0]);
+         }
+         break;
+     case MESA_SHADER_GEOMETRY:
+         /* GS input/export semantics use the same vertex semantic format */
+         for (uint32_t i = 0;
+-             i < util_bitcount64(ctx->nir->info.inputs_read); i += 1) {
++             i < util_bitcount64(inputmask); i += 1) {
+             const GnmVertexInputSemantic input = {
+                 .semantic = i,
+             };
+@@ -769,7 +780,7 @@ static PsbcResult buildshaderbinary(
+         /* HS input semantics describe which VS outputs are read.
+          * No export semantics — HS outputs go to LDS for DS. */
+         for (uint32_t i = 0;
+-             i < util_bitcount64(ctx->nir->info.inputs_read); i += 1) {
++             i < util_bitcount64(inputmask); i += 1) {
+             const GnmVertexInputSemantic input = {
+                 .semantic = i,
+             };
+@@ -878,28 +889,19 @@ static void setup_ac_info(struct ac_compiler_info* ac_info, enum amd_gfx_level g
+         ac_info->max_vgpr_alloc = 256;
+         ac_info->wave64_vgpr_alloc_granularity = 4;
+         ac_info->has_packed_math_16bit = true;
+-    } else if (gfxlevel == GFX8) {
+-        ac_info->max_waves_per_simd = 10;
+-        ac_info->num_physical_sgprs_per_simd = 16 * 10;
+-        ac_info->num_physical_wave64_vgprs_per_simd = 128;
+-        ac_info->num_simd_per_compute_unit = 1;
+-        ac_info->min_sgpr_alloc = 1;
+-        ac_info->max_sgpr_alloc = 16;
+-        ac_info->sgpr_alloc_granularity = 1;
+-        ac_info->min_wave64_vgpr_alloc = 4;
+-        ac_info->max_vgpr_alloc = 128;
+-        ac_info->wave64_vgpr_alloc_granularity = 4;
+     } else {
+-        /* GFX7 */
++        /* Match the vendored Mesa ac_fill_compiler_info() GCN register
++         * budgets, in registers (not encoded resource-register units).
++         * PS4 Neo uses the Tonga target and its SGPRInitBug allocation. */
+         ac_info->max_waves_per_simd = 10;
+-        ac_info->num_physical_sgprs_per_simd = 12 * 10;
+-        ac_info->num_physical_wave64_vgprs_per_simd = 64;
+-        ac_info->num_simd_per_compute_unit = 1;
+-        ac_info->min_sgpr_alloc = 1;
+-        ac_info->max_sgpr_alloc = 12;
+-        ac_info->sgpr_alloc_granularity = 1;
++        ac_info->num_physical_sgprs_per_simd = gfxlevel == GFX8 ? 800 : 512;
++        ac_info->num_physical_wave64_vgprs_per_simd = 256;
++        ac_info->num_simd_per_compute_unit = 4;
++        ac_info->min_sgpr_alloc = gfxlevel == GFX8 ? 96 : 8;
++        ac_info->max_sgpr_alloc = gfxlevel == GFX8 ? 96 : 104;
++        ac_info->sgpr_alloc_granularity = gfxlevel == GFX8 ? 96 : 8;
+         ac_info->min_wave64_vgpr_alloc = 4;
+-        ac_info->max_vgpr_alloc = 64;
++        ac_info->max_vgpr_alloc = 256;
+         ac_info->wave64_vgpr_alloc_granularity = 4;
+     }
+ }
+@@ -930,6 +932,89 @@ static void setup_target(PsbcTarget target,
+ 
+ /* === Main compilation function === */
+ 
++/* Standalone set-0 ABI: plain UBOs plus combined fragment sampler2D.
++ * Descriptor arrays, other image types and unsupported operations must fail
++ * instead of accepting the upstream null-descriptor fallback as a shader.
++ */
++static bool psbc_supported_resources(nir_shader *nir, const PsbcCompileOptions *opts) {
++    PsbcTarget target = opts->target;
++    nir_foreach_variable_with_modes(var, nir, nir_var_mem_ssbo | nir_var_image | nir_var_mem_push_const)
++        return false;
++    nir_foreach_function_impl(impl, nir) {
++        nir_foreach_block(block, impl) {
++            nir_foreach_instr(instr, block) {
++                if (instr->type == nir_instr_type_tex) {
++                    nir_tex_instr *tex = nir_instr_as_tex(instr);
++                    if (target == PSBC_TARGET_PS5 || nir->info.stage != MESA_SHADER_FRAGMENT ||
++                        tex->sampler_dim != GLSL_SAMPLER_DIM_2D || tex->is_array || tex->is_shadow ||
++                        tex->texture_non_uniform || tex->sampler_non_uniform ||
++                        tex->dest_type != nir_type_float32 ||
++                        (tex->op != nir_texop_tex && tex->op != nir_texop_txl))
++                        return false;
++                    unsigned descriptors = 0;
++                    for (unsigned i = 0; i < tex->num_srcs; ++i) {
++                        if (tex->src[i].src_type != nir_tex_src_texture_deref &&
++                            tex->src[i].src_type != nir_tex_src_sampler_deref)
++                            continue;
++                        nir_deref_instr *deref = nir_src_as_deref(tex->src[i].src);
++                        if (!deref || deref->deref_type != nir_deref_type_var)
++                            return false;
++                        nir_variable *var = nir_deref_instr_get_variable(deref);
++                        if (!var || var->data.descriptor_set != 0 || var->data.binding >= 16 ||
++                            !glsl_type_is_sampler(var->type))
++                            return false;
++                        if (opts->validate_resource_layout &&
++                            !(opts->texture_binding_mask & (1u << var->data.binding)))
++                            return false;
++                        ++descriptors;
++                    }
++                    if (descriptors != 2)
++                        return false;
++                }
++                if (instr->type != nir_instr_type_intrinsic)
++                    continue;
++                nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
++                switch (intr->intrinsic) {
++                case nir_intrinsic_vulkan_resource_index:
++                    if (target == PSBC_TARGET_PS5 ||
++                        (nir->info.stage != MESA_SHADER_VERTEX && nir->info.stage != MESA_SHADER_FRAGMENT) ||
++                        nir_intrinsic_desc_type(intr) != nir_descriptor_type_uniform_buffer ||
++                        nir_intrinsic_desc_set(intr) != 0 || nir_intrinsic_binding(intr) >= 16 ||
++                        !nir_src_is_const(intr->src[0]) || nir_src_as_uint(intr->src[0]) != 0)
++                        return false;
++                    if (opts->validate_resource_layout &&
++                        !(opts->uniform_binding_mask & (1u << nir_intrinsic_binding(intr))))
++                        return false;
++                    break;
++                case nir_intrinsic_load_vulkan_descriptor:
++                    if (nir_intrinsic_desc_type(intr) != nir_descriptor_type_uniform_buffer)
++                        return false;
++                    break;
++                case nir_intrinsic_load_ubo: {
++                    nir_binding binding = nir_chase_binding(intr->src[0]);
++                    if (!binding.success || (nir_intrinsic_access(intr) & ACCESS_NON_UNIFORM))
++                        return false;
++                    for (unsigned i = 0; i < binding.num_indices; ++i)
++                        if (!nir_src_is_const(binding.indices[i]) || nir_src_as_uint(binding.indices[i]) != 0)
++                            return false;
++                    break;
++                }
++                case nir_intrinsic_vulkan_resource_reindex:
++                case nir_intrinsic_load_push_constant:
++                case nir_intrinsic_load_ssbo:
++                case nir_intrinsic_store_ssbo:
++                case nir_intrinsic_ssbo_atomic:
++                case nir_intrinsic_ssbo_atomic_swap:
++                    return false;
++                default:
++                    break;
++                }
++            }
++        }
++    }
++    return true;
++}
++
+ PsbcResult psbc_compile_shader(
+     const uint32_t*       spirv,
+     size_t                spirv_size,
+@@ -1018,12 +1103,21 @@ PsbcResult psbc_compile_shader(
+     /* Gather info again — outputs_read can be out-of-date */
+     nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+     radv_nir_lower_io(nir);
++    if (mesa_stage == MESA_SHADER_FRAGMENT)
++        NIR_PASS(_, nir, ac_nir_assign_fs_input_locations);
++
++    if (!psbc_supported_resources(nir, opts)) {
++        ralloc_free(nir);
++        psbc_shutdown();
++        return PSBC_RESULT_UNSUPPORTED_RESOURCE;
++    }
+ 
+     /* Shader info + args + postprocess */
+     radv_nir_shader_info_init(stage.stage, stage.next_stage, &stage.info);
+ 
+     struct radv_shader_layout layout = {0};
+     struct radv_graphics_state_key gfx_state = {0};
++    gfx_state.vs.has_prolog = mesa_stage == MESA_SHADER_VERTEX;
+     gfx_state.ps.epilog.spi_shader_col_format = V_028714_SPI_SHADER_FP16_ABGR;
+     gfx_state.ps.epilog.color_is_int8 = 0xff;
+     gfx_state.ps.has_epilog = false;
+@@ -1033,6 +1127,18 @@ PsbcResult psbc_compile_shader(
+         RADV_PIPELINE_GRAPHICS, false, &stage.info
+     );
+ 
++    /* Standalone legacy VS compilation still needs RADV's output linking
++     * pass: it assigns PARAM exports consumed by the fragment shader.
++     * Without it ACO drops all varyings even though the PSB lists semantics.
++     */
++    if (mesa_stage == MESA_SHADER_VERTEX && gfxlevel <= GFX8) {
++        struct radv_shader_stage linked[MESA_SHADER_STAGES] = {0};
++        stage.nir = nir;
++        linked[mesa_stage] = stage;
++        radv_nir_shader_info_link(&compiler_info, &gfx_state, linked);
++        stage = linked[mesa_stage];
++    }
++
+     /* Determine previous stage for shader args declaration.
+      * HS/GS need previous_stage=VERTEX so that the merged-pipeline args
+      * (prolog_inputs, vertex_buffers, etc.) are declared for the NIR
+@@ -1144,6 +1250,7 @@ const char* psbc_result_string(PsbcResult result) {
+     switch (result) {
+     case PSBC_RESULT_OK:               return "success";
+     case PSBC_RESULT_INVALID_SPIRV:    return "invalid SPIR-V bytecode";
++    case PSBC_RESULT_UNSUPPORTED_RESOURCE: return "unsupported resource layout (PS4 standalone ABI supports non-array UBOs and fragment sampler2D in set 0, bindings 0-15)";
+     case PSBC_RESULT_UNSUPPORTED_STAGE: return "unsupported shader stage";
+     case PSBC_RESULT_COMPILE_NIR:      return "SPIR-V to NIR compilation failed";
+     case PSBC_RESULT_COMPILE_ACO:      return "ACO shader compilation failed";
+diff --git a/libpsbc/psbc_compile.h b/libpsbc/psbc_compile.h
+index 000e7e1..4a378a9 100644
+--- a/libpsbc/psbc_compile.h
++++ b/libpsbc/psbc_compile.h
+@@ -49,6 +49,7 @@ typedef enum {
+     PSBC_RESULT_COMPILE_ACO,
+     PSBC_RESULT_OUT_OF_MEMORY,
+     PSBC_RESULT_INTERNAL_ERROR,
++    PSBC_RESULT_UNSUPPORTED_RESOURCE,
+ } PsbcResult;
+ 
+ typedef struct {
+@@ -61,8 +62,23 @@ typedef struct {
+     PsbcStage   stage;
+     const char* entrypoint;  /* Default: "main" */
+     bool        optimise;    /* Default: true */
++    /* Optional bounded Vulkan set-0 layout, filtered for this shader stage.
++     * Zero-init callers retain the standalone ABI. No descriptor arrays. */
++    bool validate_resource_layout;
++    uint32_t uniform_binding_mask;
++    uint32_t texture_binding_mask;
+ } PsbcCompileOptions;
+ 
++/* Standalone set-0 descriptor table (not a Vulkan descriptor layout).
++ * Bindings 0..15: GnmBuffer at binding*16; GnmTexture at
++ * 256+binding*64, with its combined GnmSampler at +32. Texture slots
++ * are a separate bank so existing buffer-only tables remain compatible.
++ * Runtime must allocate/populate the bank used by each compiled shader.
++ */
++#define PSBC_TEXTURE_TABLE_OFFSET 256
++#define PSBC_TEXTURE_BINDING_STRIDE 64
++#define PSBC_COMBINED_SAMPLER_OFFSET 32
++
+ /* === API === */
+ 
+ /*
+diff --git a/src/amd/compiler/aco_insert_exec_mask.cpp b/src/amd/compiler/aco_insert_exec_mask.cpp
+index 3de3ba7..dd1e870 100644
+--- a/src/amd/compiler/aco_insert_exec_mask.cpp
++++ b/src/amd/compiler/aco_insert_exec_mask.cpp
+@@ -782,8 +782,19 @@ disable_wqm_block(Program* program, Block* block)
+       }
+ 
+       if (local_exact_and) {
+-         bld.sop1(Builder::s_or_saveexec, Definition(exact_mask.physReg(), bld.lm),
+-                  Definition(scc, s1), Definition(exec, bld.lm), wqm_mask, Operand(exec, bld.lm));
++         /* The pinned shadPS4 recompiler does not implement GCN OR_SAVEEXEC.
++          * Separate the save and OR when the saved mask cannot alias the source.
++          * This preserves EXEC and SCC semantics on hardware as well. */
++         if (program->gfx_level <= GFX8 &&
++             !regs_intersect(exact_mask, wqm_mask)) {
++            bld.sop1(Builder::s_mov, Definition(exact_mask.physReg(), bld.lm),
++                     Operand(exec, bld.lm));
++            bld.sop2(Builder::s_or, Definition(exec, bld.lm), Definition(scc, s1),
++                     wqm_mask, Operand(exec, bld.lm));
++         } else {
++            bld.sop1(Builder::s_or_saveexec, Definition(exact_mask.physReg(), bld.lm),
++                     Definition(scc, s1), Definition(exec, bld.lm), wqm_mask, Operand(exec, bld.lm));
++         }
+ 
+          if (local_wqm_mov && local_wqm_mov_idx < local_exact_and_idx) {
+             instructions.erase(instructions.begin() + local_exact_and_idx);
+diff --git a/src/amd/vulkan/nir/radv_nir_lower_descriptors.c b/src/amd/vulkan/nir/radv_nir_lower_descriptors.c
+index 2412880..863ea10 100644
+--- a/src/amd/vulkan/nir/radv_nir_lower_descriptors.c
++++ b/src/amd/vulkan/nir/radv_nir_lower_descriptors.c
+@@ -1,4 +1,5 @@
+ #include "amdgfxregs.h"
++#include "psbc_compile.h"
+ /*
+  * Copyright © 2020 Valve Corporation
+  *
+@@ -222,14 +223,21 @@ load_buffer_descriptor(nir_builder *b, lower_descriptors_state *state, nir_def *
+     */
+    if (binding.success) {
+       struct radv_descriptor_set_layout *layout = state->layout->set[binding.desc_set].layout;
+-      /* The standalone compiler has no descriptor set layout. Keep descriptor
+-       * users deterministic by returning a null pointer/descriptor rather than
+-       * generating an address-zero load. */
+-      if (!layout) {
+-         if (access & ACCESS_NON_UNIFORM)
+-            return nir_imm_int(b, 0);
+-         return nir_imm_ivec4(b, 0, 0, 0, 0);
++      /* OpenGNM standalone ABI: one 16-byte buffer descriptor per binding,
++       * addressed through the complete 64-bit user-data pointer. Reverse
++       * traversal preserves the original binding while lowering buffer loads.
++       * Resource-index scaffolding becomes dead after descriptor replacement.
++       */
++      if (!layout && !(access & ACCESS_NON_UNIFORM)) {
++         nir_def *ptr = get_scalar_arg(b, 2, state->args->descriptors[binding.desc_set]);
++         nir_def *addr = nir_pack_64_2x32(b, ptr);
++         nir_def *offset = nir_imm_int(b, binding.binding * 16);
++         for (unsigned i = 0; i < binding.num_indices; ++i)
++            offset = nir_iadd(b, offset, nir_imul_imm(b, binding.indices[i].ssa, 16));
++         return ac_nir_load_smem(b, 4, addr, offset, 4, 0);
+       }
++      if (!layout)
++         return nir_imm_int(b, 0);
+ 
+       if (layout->binding[binding.binding].type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
+          rsrc = nir_iadd(b, nir_channel(b, rsrc, 0), nir_channel(b, rsrc, 1));
+@@ -280,9 +288,19 @@ get_sampler_desc(nir_builder *b, lower_descriptors_state *state, nir_deref_instr
+       indirect = nir_deref_instr_has_indirect(deref);
+ 
+       struct radv_descriptor_set_layout *layout = state->layout->set[desc_set].layout;
+-      /* Standalone compiler has no descriptor set layout — return a zero descriptor */
+-      if (!layout)
+-         return nir_imm_ivec4(b, 0, 0, 0, 0);
++      /* Validated standalone sampler2D: texture and sampler share a 64-byte
++       * slot in the texture bank. Preserve both words of the user pointer. */
++      if (!layout) {
++         assert(!non_uniform && !indirect && deref->deref_type == nir_deref_type_var);
++         assert(desc_type == AC_DESC_IMAGE || desc_type == AC_DESC_SAMPLER);
++         unsigned words = desc_type == AC_DESC_SAMPLER ? 4 : 8;
++         unsigned byte_offset = PSBC_TEXTURE_TABLE_OFFSET + binding_index * PSBC_TEXTURE_BINDING_STRIDE;
++         if (desc_type == AC_DESC_SAMPLER)
++            byte_offset += PSBC_COMBINED_SAMPLER_OFFSET;
++         nir_def *ptr = get_scalar_arg(b, 2, state->args->descriptors[desc_set]);
++         return ac_nir_load_smem(b, words, nir_pack_64_2x32(b, ptr),
++                                nir_imm_int(b, byte_offset), 16, 0);
++      }
+       struct radv_descriptor_set_binding_layout *binding = &layout->binding[binding_index];
+ 
+       if (desc_type == AC_DESC_SAMPLER) {
+diff --git a/src/amd/vulkan/radv_shader.c b/src/amd/vulkan/radv_shader.c
+index 61fe2b4..7dc552b 100644
+--- a/src/amd/vulkan/radv_shader.c
++++ b/src/amd/vulkan/radv_shader.c
+@@ -1740,7 +1740,7 @@ radv_precompute_registers_hw_hs(struct radv_device *device, struct radv_shader *
+    if (pdev->info.gfx_level < GFX11)
+       return;
+ 
+-   unsigned inst_pref_size = radv_get_inst_pref_size(&device->compiler_info, shader->exec_size);
++   unsigned inst_pref_size = radv_get_inst_pref_size(device->compiler_info, shader->exec_size);
+ 
+    if (pdev->info.gfx_level >= GFX12) {
+       regs->spi_shader_pgm_rsrc4_gs_hs =
+@@ -1823,7 +1823,7 @@ radv_precompute_registers_hw_ngg(struct radv_device *device, struct radv_shader
+ 
+    if (pdev->info.gfx_level >= GFX12) {
+       const unsigned num_params = MAX2(info->outinfo.param_exports, 1);
+-      unsigned inst_pref_size = radv_get_inst_pref_size(&device->compiler_info, shader->exec_size);
++      unsigned inst_pref_size = radv_get_inst_pref_size(device->compiler_info, shader->exec_size);
+ 
+       regs->spi_vs_out_config = S_00B0C4_VS_EXPORT_COUNT(num_params - 1) | S_00B0C4_PRIM_EXPORT_COUNT(num_prim_params) |
+                                 S_00B0C4_NO_PC_EXPORT(no_pc_export);
+@@ -1844,7 +1844,7 @@ radv_precompute_registers_hw_ngg(struct radv_device *device, struct radv_shader
+          ac_apply_cu_en(S_00B21C_CU_EN(cu_mask) | S_00B21C_WAVE_LIMIT(0x3F), C_00B21C_CU_EN, 0, &pdev->info);
+ 
+       if (pdev->info.gfx_level >= GFX11) {
+-         unsigned inst_pref_size = radv_get_inst_pref_size(&device->compiler_info, shader->exec_size);
++         unsigned inst_pref_size = radv_get_inst_pref_size(device->compiler_info, shader->exec_size);
+ 
+          regs->spi_shader_pgm_rsrc4_gs_hs =
+             ac_apply_cu_en(S_00B204_CU_EN_GFX11(0x1) | S_00B204_SPI_SHADER_LATE_ALLOC_GS_GFX10(late_alloc_wave64) |
+@@ -1995,7 +1995,7 @@ radv_precompute_registers_hw_fs(struct radv_device *device, struct radv_shader *
+       regs->ps.spi_ps_in_control = S_028640_PS_W32_EN(info->wave_size == 32);
+       regs->ps.spi_gs_out_config_ps = S_00B0C4_NUM_INTERP(info->ps.num_inputs);
+ 
+-      unsigned inst_pref_size = radv_get_inst_pref_size(&device->compiler_info, shader->exec_size);
++      unsigned inst_pref_size = radv_get_inst_pref_size(device->compiler_info, shader->exec_size);
+       regs->ps.spi_shader_pgm_rsrc4_ps =
+          S_00B01C_WAVE_LIMIT_GFX12(0x3FF) | S_00B01C_LDS_GROUP_SIZE_GFX12(1) | S_00B01C_INST_PREF_SIZE(inst_pref_size);
+ 
+@@ -2018,7 +2018,7 @@ radv_precompute_registers_hw_fs(struct radv_device *device, struct radv_shader *
+       }
+ 
+       if (pdev->info.gfx_level >= GFX11) {
+-         unsigned inst_pref_size = radv_get_inst_pref_size(&device->compiler_info, shader->exec_size);
++         unsigned inst_pref_size = radv_get_inst_pref_size(device->compiler_info, shader->exec_size);
+ 
+          unsigned cu_mask_ps = ac_gfx103_get_cu_mask_ps(&pdev->info);
+ 
+@@ -3194,7 +3194,7 @@ radv_shader_part_create(struct radv_device *device, struct radv_shader_part_bina
+    shader_part->spi_shader_z_format = binary->info.spi_shader_z_format;
+ 
+    if (pdev->info.gfx_level >= GFX11)
+-      shader_part->inst_pref_size = radv_get_inst_pref_size(&device->compiler_info, binary->exec_size);
++      shader_part->inst_pref_size = radv_get_inst_pref_size(device->compiler_info, binary->exec_size);
+ 
+    /* Allocate memory and upload. */
+    shader_part->alloc = radv_alloc_shader_memory(device, shader_part->code_size, false, NULL);
+diff --git a/src/amd/vulkan/radv_shader_args.c b/src/amd/vulkan/radv_shader_args.c
+index 029dc1f..dae7437 100644
+--- a/src/amd/vulkan/radv_shader_args.c
++++ b/src/amd/vulkan/radv_shader_args.c
+@@ -114,14 +114,15 @@ add_ud_arg(struct radv_shader_args_state *state, unsigned size, enum ac_arg_type
+ static void
+ add_descriptor_set(struct radv_shader_args_state *state, uint32_t set)
+ {
+-   RADV_ADD_ARRAY_ARG(state, AC_ARG_SGPR, 1, AC_ARG_CONST_ADDR, descriptors, set);
++   /* OpenGNM passes a full 64-bit table address, not RADV address32. */
++   RADV_ADD_ARRAY_ARG(state, AC_ARG_SGPR, 2, AC_ARG_CONST_ADDR, descriptors, set);
+ 
+    struct radv_userdata_info *ud_info = &state->args->user_sgprs_locs.descriptor_sets[set];
+    ud_info->sgpr_idx = state->args->num_user_sgprs;
+-   ud_info->num_sgprs = 1;
++   ud_info->num_sgprs = 2;
+ 
+    state->args->user_sgprs_locs.descriptor_sets_enabled |= 1u << set;
+-   state->args->num_user_sgprs++;
++   state->args->num_user_sgprs += 2;
+ }
+ 
+ static void
+@@ -202,7 +203,7 @@ declare_vs_specific_input_sgprs(struct radv_shader_args_state *state, const stru
+ 
+    if (info->type != RADV_SHADER_TYPE_GS_COPY) {
+       if (info->vs.vb_desc_usage_mask) {
+-         RADV_ADD_UD_ARG(state, 1, AC_ARG_CONST_ADDR, ac.vertex_buffers, AC_UD_VS_VERTEX_BUFFERS);
++         RADV_ADD_UD_ARG(state, 2, AC_ARG_CONST_ADDR, ac.vertex_buffers, AC_UD_VS_VERTEX_BUFFERS);
+       }
+ 
+       RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.base_vertex, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+@@ -433,7 +434,7 @@ declare_unmerged_vs_tcs_args(struct radv_shader_args_state *state, const enum am
+ {
+    /* SGPRs */
+    RADV_ADD_UD_ARG(state, 2, AC_ARG_VALUE, prolog_inputs, AC_UD_VS_PROLOG_INPUTS);
+-   RADV_ADD_UD_ARG(state, 1, AC_ARG_CONST_ADDR, ac.vertex_buffers, AC_UD_VS_VERTEX_BUFFERS);
++   RADV_ADD_UD_ARG(state, 2, AC_ARG_CONST_ADDR, ac.vertex_buffers, AC_UD_VS_VERTEX_BUFFERS);
+    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.base_vertex, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.start_instance, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+@@ -482,7 +483,7 @@ declare_unmerged_vs_tes_gs_args(struct radv_shader_args_state *state, const enum
+ {
+    /* SGPRs */
+    RADV_ADD_UD_ARG(state, 2, AC_ARG_VALUE, prolog_inputs, AC_UD_VS_PROLOG_INPUTS);
+-   RADV_ADD_UD_ARG(state, 1, AC_ARG_CONST_ADDR, ac.vertex_buffers, AC_UD_VS_VERTEX_BUFFERS);
++   RADV_ADD_UD_ARG(state, 2, AC_ARG_CONST_ADDR, ac.vertex_buffers, AC_UD_VS_VERTEX_BUFFERS);
+    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.base_vertex, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.start_instance, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+@@ -1003,7 +1004,7 @@ radv_declare_shader_args(const struct radv_compiler_info *compiler_info,
+          assert(user_sgpr_info.remaining_sgprs >= RADV_MAX_HEAPS);
+          user_sgpr_info.remaining_sgprs -= RADV_MAX_HEAPS;
+       } else {
+-         const uint32_t num_desc_set = util_bitcount(info->desc_set_used_mask);
++         const uint32_t num_desc_set = 2 * util_bitcount(info->desc_set_used_mask);
+ 
+          if (info->force_indirect_descriptors || remaining_sgprs < num_desc_set) {
+             user_sgpr_info.indirect_all_descriptor_sets = true;
+diff --git a/src/util/log.c b/src/util/log.c
+index b594a8f..2a5afdb 100644
+--- a/src/util/log.c
++++ b/src/util/log.c
+@@ -31,7 +31,7 @@
+ #include "util/ralloc.h"
+ #include "util/u_debug.h"
+ 
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX && !defined(__ORBIS__)
+ #include <syslog.h>
+ #include "util/u_process.h"
+ #endif
+@@ -142,7 +142,14 @@ mesa_log_init_once(void)
+ 
+    mesa_log_file = stderr;
+ 
+-#if !DETECT_OS_WINDOWS
++#if defined(__ORBIS__)
++   const char *log_file = os_get_option("MESA_LOG_FILE");
++   FILE *fp = fopen(log_file ? log_file : "/data/scummvm-vulkan-mesa.log", "a");
++   if (fp) {
++      mesa_log_file = fp;
++      mesa_log_control |= MESA_LOG_CONTROL_FILE;
++   }
++#elif !DETECT_OS_WINDOWS
+    if (__normal_user()) {
+       FILE *fp = NULL;
+ 
+@@ -168,7 +175,7 @@ mesa_log_init_once(void)
+    }
+ #endif
+ 
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX && !defined(__ORBIS__)
+    if (mesa_log_control & MESA_LOG_CONTROL_SYSLOG)
+       openlog(util_get_process_name(), LOG_NDELAY | LOG_PID, LOG_USER);
+ #endif
+@@ -316,7 +323,7 @@ logger_file(enum mesa_log_level level,
+       free(msg);
+ }
+ 
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX && !defined(__ORBIS__)
+ 
+ static inline int
+ level_to_syslog(enum mesa_log_level l)
+@@ -452,7 +459,7 @@ mesa_log_v(enum mesa_log_level level, const char *tag, const char *format,
+                   va_list va);
+    } loggers[] = {
+       { MESA_LOG_CONTROL_FILE, logger_file },
+-#if DETECT_OS_POSIX
++#if DETECT_OS_POSIX && !defined(__ORBIS__)
+       { MESA_LOG_CONTROL_SYSLOG, logger_syslog },
+ #endif
+ #if DETECT_OS_ANDROID

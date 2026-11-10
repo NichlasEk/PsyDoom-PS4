@@ -1,0 +1,61 @@
+#pragma once
+
+#if __has_include_next(<concepts>)
+#include_next <concepts>
+#endif
+
+#include <type_traits>
+#include <iterator>
+#include <functional>
+
+namespace std {
+
+template <class From, class To>
+concept convertible_to = is_convertible_v<From, To>;
+
+template <class Derived, class Base>
+concept derived_from = is_base_of_v<Base, Derived> &&
+                       is_convertible_v<const volatile Derived*, const volatile Base*>;
+
+template <class T>
+concept integral = is_integral_v<T>;
+
+template <class T>
+concept signed_integral = integral<T> && is_signed_v<T>;
+
+template <class T>
+concept unsigned_integral = integral<T> && !signed_integral<T>;
+
+template <class T>
+concept floating_point = is_floating_point_v<T>;
+
+template <class T>
+concept contiguous_iterator = requires(T value) {
+    { *value };
+    { ++value } -> same_as<T&>;
+};
+
+// C++20 std::predicate concept (used by rpcs3's simple_array)
+template <class F, class... Args>
+concept predicate = requires(F&& f, Args&&... args) {
+    { std::invoke(std::forward<F>(f), std::forward<Args>(args)...) } -> convertible_to<bool>;
+};
+
+// C++20 std::invocable concept
+template <class F, class... Args>
+concept invocable = requires(F&& f, Args&&... args) {
+    std::invoke(std::forward<F>(f), std::forward<Args>(args)...);
+};
+
+// C++20 std::regular_invocable concept
+template <class F, class... Args>
+concept regular_invocable = invocable<F, Args...>;
+
+} // namespace std
+
+// std::unreachable (C++23)
+#include <cstdlib>
+namespace std {
+[[noreturn]] inline void unreachable() { __builtin_unreachable(); }
+}
+

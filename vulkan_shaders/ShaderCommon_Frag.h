@@ -1,4 +1,17 @@
 #include "ShaderCommon.h"
+#ifdef PSYDOOM_PS4_UBO
+// PS4 compiler supports float sampling. R16_UNORM preserves the original
+// 16-bit VRAM words; nearest sampling and rounding recover every bit.
+#define usampler2D sampler2D
+layout(std140, set = 0, binding = 8) uniform VramDimensions {
+    layout(offset = 96) vec2 inverseSize;
+} vramDimensions;
+uint readVram(usampler2D vram, ivec2 uv) {
+    return uint(round(textureLod(vram, (vec2(uv) + 0.5) * vramDimensions.inverseSize, 0.0).r * 65535.0));
+}
+#else
+uint readVram(usampler2D vram, ivec2 uv) { return texelFetch(vram, uv, 0).r; }
+#endif
 
 //----------------------------------------------------------------------------------------------------------------------
 // Directly read a 16-bit texel from PSX VRAM with no filtering.
@@ -7,7 +20,7 @@
 //----------------------------------------------------------------------------------------------------------------------
 vec4 sampleVramTexel(usampler2D vram, ivec2 uv, vec4 stmul, const bool bAllowDiscard) {
     // If the texel bits are all zero then the pixel is to be discarded
-    uint texelBits = texelFetch(vram, uv, 0).r;
+    uint texelBits = readVram(vram, uv);
 
     if (bAllowDiscard) {
         if (texelBits == 0)
@@ -23,9 +36,16 @@ vec4 sampleVramTexel(usampler2D vram, ivec2 uv, vec4 stmul, const bool bAllowDis
     ) / 31.0;
 
     // Multiply by the semi-transparency multiply if the pixel is semi-transparent
+#ifdef PSYDOOM_PS4_UBO
+    // Keep this bit selection arithmetic. ACO lowers a conditional bit test
+    // to V_CMP_CLASS_F32 with a dynamic class mask, unsupported by shadPS4.
+    float semiTransparent = float((texelBits >> 15) & 1u);
+    color *= mix(vec4(1.0), stmul, semiTransparent);
+#else
     if ((texelBits & 0x8000) != 0) {
         color *= stmul;
     }
+#endif
 
     return color;
 }
@@ -81,7 +101,7 @@ vec4 tex8bpp(
 
     // Figure out which 8-bits of the 16-bit pixel we will use for the CLUT index and get the CLUT index.
     // Note: must adjust the uv 'x' coordinate for the 8bpp pixel rate since VRAM is 16bpp.
-    uint vramTexel = texelFetch(vram, ivec2(uv.x / 2, uv.y), 0).r;
+    uint vramTexel = readVram(vram, ivec2(uv.x / 2, uv.y));
     uint byteIdx = uv.x & 1;
     uint clutIdx = vramTexel >> (byteIdx * 8);
     clutIdx &= 0xFF;
@@ -115,7 +135,7 @@ vec4 tex4bpp(
 
     // Figure out which 4-bits of the 16-bit pixel we will use for the CLUT index and get the CLUT index.
     // Note: must adjust the uv 'x' coordinate for the 4bpp pixel rate since VRAM is 16bpp.
-    uint vramTexel = texelFetch(vram, ivec2(uv.x / 4, uv.y), 0).r;
+    uint vramTexel = readVram(vram, ivec2(uv.x / 4, uv.y));
     uint nibbleIdx = uv.x & 3;
     uint clutIdx = vramTexel >> (nibbleIdx * 4);
     clutIdx &= 0xF;

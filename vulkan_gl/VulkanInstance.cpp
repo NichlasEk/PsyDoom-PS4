@@ -198,10 +198,14 @@ bool VulkanInstance::createVkInstance(const bool bEnableValidationLayers) noexce
 
     {
         // Note: the SDL window CAN be null here if we are making a headless Vulkan instance not associated with any SDL Window.
+        #ifdef __PS4__
+        reqExtNames.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        #else
         unsigned int reqExtCount = {};
         SDL_Vulkan_GetInstanceExtensions(mpSdlWindow, &reqExtCount, nullptr);
         reqExtNames.resize(reqExtCount);
         SDL_Vulkan_GetInstanceExtensions(mpSdlWindow, &reqExtCount, reqExtNames.data());
+        #endif
     }
 
     // The required API layers: none by default, unless we want validation layers

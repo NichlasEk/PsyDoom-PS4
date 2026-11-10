@@ -8,3 +8,7 @@ CMakeSettings.json
 # Visual Studio Files
 .vs/
 .dccache
+# Local game data, reports and PS4 packages
+/artifacts/
+/dist/
+__pycache__/

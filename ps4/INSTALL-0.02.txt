@@ -1,0 +1,24 @@
+PsyDoom PS4 0.02
+Install PsyDoom-PS4-0.02.pkg. Game data is NOT included.
+
+Copy your own supported PlayStation Doom disc dump (CUE and ALL referenced BIN
+files, with original relative filenames) into one of these directories:
+  1. HDD:  /data/psydoom/disc/
+  2. USB0: /mnt/usb0/psydoom/disc/
+  3. USB1: /mnt/usb1/psydoom/disc/
+On a USB drive, create psydoom/disc/ at the drive root.
+
+Search is HDD first, then USB0, then USB1. Doom.cue is preferred within each
+folder; other .cue filenames are supported (including .CUE). Broken CUE files,
+missing/unreadable track files and empty discs are skipped. Keep one game dump
+per folder to avoid an unintended alphabetical choice. USB game data is read
+in place: leave the drive connected while playing. Saves/configuration/logs
+remain on HDD under /data/psydoom.
+
+PS4 controller: Cross=confirm, Circle=use/open/back, R2 or Triangle=attack,
+L1/R1=previous/next weapon, Options=pause, left stick=move, right stick=turn.
+shadPS4 default keyboard: N=confirm, B=use/open, O or C=attack, Q/U=weapons,
+Enter=pause, WASD=move, IJKL=turn. Normal desktop number-key binds are not
+forwarded as keyboard events by the PS4 controller backend.
+
+Based on the user-accepted clock/input build. Physical PS4 testing is pending.

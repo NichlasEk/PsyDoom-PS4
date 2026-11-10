@@ -1,3 +1,6 @@
+#ifdef __PS4__
+#include "videoout_surface.h"
+#endif
 #include "VkFuncs.h"
 
 #include "Asserts.h"
@@ -65,7 +68,11 @@ static void loadDeviceFunc(
 //------------------------------------------------------------------------------------------------------------------------------------------
 void VkFuncs::loadGlobalFuncs() noexcept {
     // This one is special, we get it from SDL as it handles all of the dynamic library loading for us...
+    #ifdef __PS4__
+    vkGetInstanceProcAddr = PS4VulkanGetInstanceProcAddr;
+    #else
     vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr) SDL_Vulkan_GetVkGetInstanceProcAddr();
+    #endif
 
     if (!vkGetInstanceProcAddr) {
         FatalErrors::raise("Failed to retrieve the required Vulkan function 'vkGetInstanceProcAddr'!\nRequired Vulkan functionality missing!");

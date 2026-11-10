@@ -1,0 +1,24 @@
+#pragma once
+
+// C++23 <span> compat for OpenOrbis libc++ (llvm18).
+// libc++18's span doesn't have iterator-based constructors (C++23 addition).
+// This header adds them.
+
+#if __has_include_next(<span>)
+#include_next <span>
+#endif
+
+#include <iterator>
+
+namespace std {
+
+// Add iterator-based constructor as a free function extension.
+// We can't modify the span class, so we provide a helper.
+template <class It, class Sent>
+auto make_span(It first, Sent last) {
+    using T = typename std::iterator_traits<It>::value_type;
+    auto size = std::distance(first, last);
+    return std::span<T>(&*first, static_cast<size_t>(size));
+}
+
+} // namespace std

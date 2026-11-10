@@ -184,7 +184,12 @@ static void initSamplers(vgl::LogicalDevice& device) noexcept {
         settings.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         settings.minLod = 0;
         settings.maxLod = 0;
-        settings.unnormalizedCoordinates = true;    // Note: Vulkan requires min/max lod to be '0' and clamp to edge to be 'true' if using un-normalized coords
+#if defined(__PS4__)
+        settings.unnormalizedCoordinates = false;
+#else
+        settings.unnormalizedCoordinates = true;
+#endif
+        //    // Note: Vulkan requires min/max lod to be '0' and clamp to edge to be 'true' if using un-normalized coords
 
         if (!gSampler_draw.init(device, settings))
             FatalErrors::raise("Failed to init a Vulkan sampler!");
@@ -208,7 +213,7 @@ static void initSamplers(vgl::LogicalDevice& device) noexcept {
 // Initializes all descriptor set layouts.
 // Requires all samplers to have been created first and uses immutable samplers baked into the layout for better performance.
 //------------------------------------------------------------------------------------------------------------------------------------------
-static void initDescriptorSetLayouts(vgl::LogicalDevice& device) noexcept {
+static void initDescriptorSetLayouts(vgl::LogicalDevice& device, const uint32_t numSamples) noexcept {
     // Regular drawing
     {
          const VkSampler vkSamplers[] = { gSampler_draw.getVkSampler() };
@@ -218,14 +223,25 @@ static void initDescriptorSetLayouts(vgl::LogicalDevice& device) noexcept {
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = C_ARRAY_SIZE(vkSamplers);
         bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+#if !defined(__PS4__)
+        // PS4 uses the sampler supplied by each descriptor write.
         bindings[0].pImmutableSamplers = vkSamplers;
+#endif
 
+#if defined(__PS4__)
+        const VkDescriptorSetLayoutBinding ps4Bindings[] = {
+            bindings[0], {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}
+        };
+        if (!gDescSetLayout_draw.init(device, ps4Bindings, C_ARRAY_SIZE(ps4Bindings)))
+#else
         if (!gDescSetLayout_draw.init(device, bindings, C_ARRAY_SIZE(bindings)))
+#endif
             FatalErrors::raise("Failed to init the 'draw' Vulkan descriptor set layout!");
     }
 
-    // MSAA resolve
-    {
+    // MSAA resolve: no input attachment layout is needed without MSAA.
+    if (numSamples > 1) {
         VkDescriptorSetLayoutBinding bindings[1] = {};
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
@@ -238,7 +254,9 @@ static void initDescriptorSetLayouts(vgl::LogicalDevice& device) noexcept {
 
     // Crossfading
     {
+#if !defined(__PS4__)
         const VkSampler vkSampler = gSampler_normClampNearest.getVkSampler();
+#endif
 
         // Note: used to use an array of 2 textures, but MoltenVK didn't like that on MacOS.
         // Use 2 separate texture bindings instead to work around the issue...
@@ -247,15 +265,29 @@ static void initDescriptorSetLayouts(vgl::LogicalDevice& device) noexcept {
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = 1;
         bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+#if !defined(__PS4__)
+        // PS4 uses the sampler supplied by each descriptor write.
         bindings[0].pImmutableSamplers = &vkSampler;
+#endif
 
         bindings[1].binding = 1;
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+#if !defined(__PS4__)
+        // PS4 uses the sampler supplied by each descriptor write.
         bindings[1].pImmutableSamplers = &vkSampler;
+#endif
 
+#if defined(__PS4__)
+        const VkDescriptorSetLayoutBinding ps4Bindings[] = {
+            bindings[0], bindings[1], {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}
+        };
+        if (!gDescSetLayout_crossfade.init(device, ps4Bindings, C_ARRAY_SIZE(ps4Bindings)))
+#else
         if (!gDescSetLayout_crossfade.init(device, bindings, C_ARRAY_SIZE(bindings)))
+#endif
             FatalErrors::raise("Failed to init the 'crossfade' Vulkan descriptor set layout!");
     }
 
@@ -268,7 +300,10 @@ static void initDescriptorSetLayouts(vgl::LogicalDevice& device) noexcept {
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = C_ARRAY_SIZE(vkSamplers);
         bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+#if !defined(__PS4__)
+        // PS4 uses the sampler supplied by each descriptor write.
         bindings[0].pImmutableSamplers = vkSamplers;
+#endif
 
         if (!gDescSetLayout_loadingPlaque.init(device, bindings, C_ARRAY_SIZE(bindings)))
             FatalErrors::raise("Failed to init the 'loading plaque' Vulkan descriptor set layout!");
@@ -279,7 +314,7 @@ static void initDescriptorSetLayouts(vgl::LogicalDevice& device) noexcept {
 // Initializes all pipeline layouts.
 // Requires descriptor set layouts to have been created first.
 //------------------------------------------------------------------------------------------------------------------------------------------
-static void initPipelineLayouts(vgl::LogicalDevice& device) noexcept {
+static void initPipelineLayouts(vgl::LogicalDevice& device, const uint32_t numSamples) noexcept {
     // Regular drawing pipeline layout: uses push constants to set the MVP matrix.
     {
         const VkDescriptorSetLayout vkDescSetLayouts[] = { gDescSetLayout_draw.getVkLayout() };
@@ -289,12 +324,16 @@ static void initPipelineLayouts(vgl::LogicalDevice& device) noexcept {
         uniformPushConstants.offset = 0;
         uniformPushConstants.size = sizeof(VShaderUniforms_Draw);
 
+#if defined(__PS4__)
+        if (!gPipelineLayout_draw.init(device, vkDescSetLayouts, C_ARRAY_SIZE(vkDescSetLayouts), nullptr, 0))
+#else
         if (!gPipelineLayout_draw.init(device, vkDescSetLayouts, C_ARRAY_SIZE(vkDescSetLayouts), &uniformPushConstants, 1))
+#endif
             FatalErrors::raise("Failed to init the 'draw' Vulkan pipeline layout!");
     }
 
-    // MSAA resolve pipeline layout: no push constants needed for this one!
-    {
+    // MSAA resolve pipeline layout: only needed when resolving samples.
+    if (numSamples > 1) {
         const VkDescriptorSetLayout vkDescSetLayouts[] = { gDescSetLayout_msaaResolve.getVkLayout() };
 
         if (!gPipelineLayout_msaaResolve.init(device, vkDescSetLayouts, C_ARRAY_SIZE(vkDescSetLayouts), nullptr, 0))
@@ -310,7 +349,11 @@ static void initPipelineLayouts(vgl::LogicalDevice& device) noexcept {
         uniformPushConstants.offset = 0;
         uniformPushConstants.size = sizeof(VShaderUniforms_Crossfade);
 
+#if defined(__PS4__)
+        if (!gPipelineLayout_crossfade.init(device, vkDescSetLayouts, C_ARRAY_SIZE(vkDescSetLayouts), nullptr, 0))
+#else
         if (!gPipelineLayout_crossfade.init(device, vkDescSetLayouts, C_ARRAY_SIZE(vkDescSetLayouts), &uniformPushConstants, 1))
+#endif
             FatalErrors::raise("Failed to init the 'crossfade' Vulkan pipeline layout!");
     }
 
@@ -544,8 +587,8 @@ void initPipelineComponents(vgl::LogicalDevice& device, const uint32_t numSample
     // Create all pipeline creation inputs and states
     initShaders(device);
     initSamplers(device);
-    initDescriptorSetLayouts(device);
-    initPipelineLayouts(device);
+    initDescriptorSetLayouts(device, numSamples);
+    initPipelineLayouts(device, numSamples);
     initPipelineInputAssemblyStates();
     initPipelineRasterizationStates();
     initPipelineMultisampleStates(device, numSamples);

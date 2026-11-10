@@ -339,7 +339,12 @@ void drawPlaque(texture_t& plaqueTex, const int16_t plaqueX, const int16_t plaqu
 
         // Draw the plaque
         cmdRec.bindDescriptorSet(*gpDescSet_Plaque, pipeline, 0);
-        cmdRec.draw(12, 6);
+        #if defined(__PS4__)
+            cmdRec.bindVertexBuffer(gVertexBuffer, 0, 6 * sizeof(VVertex_XyUv));
+            cmdRec.draw(12, 0);
+        #else
+            cmdRec.draw(12, 6);
+        #endif
     }
 
     // Cleanup when we are done by destroying the plaque tex later

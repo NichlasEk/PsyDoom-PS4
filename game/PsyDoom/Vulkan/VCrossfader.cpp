@@ -22,6 +22,7 @@
 #include "VRenderPath_Crossfade.h"
 #include "VRenderPath_Main.h"
 #include "VScreenQuad.h"
+#include "VPs4Uniforms.h"
 
 BEGIN_NAMESPACE(VCrossfader)
 
@@ -46,7 +47,7 @@ static void initDescriptorPoolAndSet(vgl::LogicalDevice& device) noexcept {
     poolResourceCount.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolResourceCount.descriptorCount = 2;
 
-    if (!gDescriptorPool.init(device, { poolResourceCount }, 1))
+    if (!gDescriptorPool.init(device, { poolResourceCount, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1} }, 1))
         FatalErrors::raise("Failed to create a descriptor pool used for crossfading!");
 
     // Alloc the single descriptor set
@@ -118,8 +119,14 @@ static void drawCrossfadeFrame(const float fadePercentComplete) noexcept {
     cmdRec.setViewport(0.0f, 0.0f, (float) viewportW, (float) viewportH, 0.0f, 1.0f);
     cmdRec.setScissors(0, 0, viewportW, viewportH);
     cmdRec.bindPipeline(pipeline);
+#if defined(__PS4__)
+    bindPs4Uniforms(cmdRec, pipeline, *gDescriptorPool.getDevice(),
+        VPipelines::gDescSetLayout_crossfade, &fadePercentComplete, sizeof(float),
+        VPipelines::gSampler_normClampNearest, *gpCrossfadeTex1, gpCrossfadeTex2);
+#else
     cmdRec.bindDescriptorSet(*gpDescriptorSet, pipeline, 0);
     cmdRec.pushConstants(VPipelines::gPipelineLayout_crossfade, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(float), &fadePercentComplete);
+#endif
 
     gScreenQuad.bindVertexBuffer(cmdRec, 0);
     gScreenQuad.draw(cmdRec);

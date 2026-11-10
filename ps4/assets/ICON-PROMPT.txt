@@ -1,0 +1,6 @@
+Generated with the built-in image_gen tool, 2026-11-10.
+Original: psydoom-icon-source.png. Package asset: icon0.png (512x512 RGB PNG).
+Original retained; package conversion used ImageMagick resize and PNG24 encoding.
+
+Prompt:
+Use case: stylized-concept. Create a premium square PS4 homebrew game launcher icon for PsyDoom, a PlayStation-style Doom source port. Large precisely spelled text 'PSYDOOM' in heavy sculpted metallic letters, warm bronze and steel, dominant and readable at 512x512 and thumbnail size. A green armored space marine helmet silhouette beneath the title, hellfire orange glow at bottom, deep black and charcoal industrial cathedral backdrop. Rich painted 1990s dark sci-fi game cover aesthetic, sharp high-contrast composition, tasteful sparks and smoky lighting, no gore. Fill the square edge to edge, opaque background. Keep all essential text and subject comfortably inside 8 percent safe margin. No console logo, no platform banner, no extra text, no rounded corners. Produce a square PNG game icon.

@@ -566,7 +566,7 @@ void O_DrawBackground(
         // Support widescreen if widescreen options menu tiling is enabled.
         // This allows user mods or new game types to implement menus that fully support widescreen.
         if (Video::isUsingVulkanRenderPath() && Config::gbVulkanWidescreenEnabled && MapInfo::getGameInfo().bAllowWideOptionsBg) {
-            const int32_t extraSpaceAtSides = (int32_t) std::max(std::floor(VRenderer::gPsxCoordsFbX), 0.0f);
+            const int32_t extraSpaceAtSides = (int32_t) std::max<float>(std::floor(VRenderer::gPsxCoordsFbX), 0.0f);
             const int32_t numExtraTilesAtSides = (extraSpaceAtSides + tileW - 1) / tileW;
             numTilesX += numExtraTilesAtSides * 2;
         }

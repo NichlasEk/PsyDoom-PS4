@@ -1,0 +1,3 @@
+#ifndef RADV_ENTRYPOINTS_H
+#define RADV_ENTRYPOINTS_H
+#endif

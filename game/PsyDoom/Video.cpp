@@ -4,6 +4,7 @@
 #include "Video.h"
 
 #include "Asserts.h"
+#include "FatalErrors.h"
 #include "Config/Config.h"
 #include "Gpu.h"
 #include "ProgArgs.h"
@@ -57,15 +58,22 @@ static uint8_t pickStartupDisplay() noexcept {
 
     // Get the current mouse position and determine the display index from that.
     // Note: if an error occurs determining the display (negative return value) then just default to the first display.
+    #ifdef __PS4__
+    return 0; // PS4 has one output and no desktop mouse display.
+    #else
     SDL_Point mousePos = {};
     SDL_GetGlobalMouseState(&mousePos.x, &mousePos.y);
     return (uint8_t) std::clamp(SDL_GetPointDisplayIndex(&mousePos), 0, numDisplays - 1);
+    #endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Pick which resolution to use for the game's window on startup
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void decideStartupResolution(const uint8_t displayIndex, int32_t& w, int32_t& h) noexcept {
+    #ifdef __PS4__
+    w=1280; h=720; return;
+    #endif
     // Get the screen resolution.
     // On high DPI screens like MacOS retina the resolution returned will be virtual not physical resolution.
     SDL_DisplayMode displayMode;
@@ -114,6 +122,9 @@ static void determineVideoBackend() noexcept {
         }
     #endif
 
+    #ifdef __PS4__
+    FatalErrors::raise("PS4 requires Vulkan; driver capabilities or configuration rejected startup.");
+    #endif
     gpVideoBackend = &gVideoBackend_SDL;
     gBackendType = BackendType::SDL;
 }
@@ -205,10 +216,12 @@ void initVideo() noexcept {
     // Note: added the set focus and warp mouse calls for MacOS to prevent a strange freezing issue on pressing the
     // left mouse button after launch. I believe that issue was due to the mouse cursor being at the edge of the window.
     // Pressing the left mouse in this situation freezes the app since the OS belives it is resizing.
+#if !defined(__PS4__)
     SDL_ShowCursor(SDL_DISABLE);
     SDL_SetWindowInputFocus(gpSdlWindow);
     SDL_WarpMouseInWindow(gpSdlWindow, winSizeX / 2, winSizeY / 2);
     SDL_SetRelativeMouseMode(SDL_TRUE);
+#endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

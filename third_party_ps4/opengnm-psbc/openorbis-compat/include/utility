@@ -1,0 +1,17 @@
+#pragma once
+
+#if __has_include_next(<utility>)
+#include_next <utility>
+#endif
+
+#if __cplusplus >= 202002L
+namespace std {
+
+// C++23 std::to_underlying
+template <class T>
+constexpr underlying_type_t<T> to_underlying(T value) noexcept {
+    return static_cast<underlying_type_t<T>>(value);
+}
+
+} // namespace std
+#endif

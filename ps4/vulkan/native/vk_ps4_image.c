@@ -1,0 +1,344 @@
+/*
+ * vk_ps4_image.c — VkImage / VkImageView implementation.
+ *
+ * VkImage with color attachment usage → GnmRenderTarget
+ * VkImage with depth/stencil usage → GnmDepthRenderTarget
+ * VkImage with sampled/storage usage → GnmTexture
+ * VkImageView → copy/modify the GnmTexture or GnmRenderTarget descriptor
+ */
+
+#include "vk_ps4_internal.h"
+
+#include <string.h>
+
+static GnmTextureType vk_image_type_to_gnm(VkImageType type) {
+    switch (type) {
+    case VK_IMAGE_TYPE_1D: return GNM_TEXTURE_1D;
+    case VK_IMAGE_TYPE_2D: return GNM_TEXTURE_2D;
+    case VK_IMAGE_TYPE_3D: return GNM_TEXTURE_3D;
+    default: return GNM_TEXTURE_2D;
+    }
+}
+
+static bool vk_image_is_color_target(const VkImageCreateInfo *ci) {
+    return (ci->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
+}
+
+static bool vk_image_is_depth(const VkImageCreateInfo *ci) {
+    return (ci->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_ps4_CreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
+                   const VkAllocationCallbacks *pAllocator, VkImage *pImage) {
+    if (!device || !pCreateInfo || !pImage) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    VkPs4Device *dev = (VkPs4Device *)device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : &dev->allocator;
+
+    /* The current host-linear layout implementation covers a single RGBA8
+     * surface. Reject other shapes instead of reporting a fabricated pitch. */
+    if (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR &&
+        (pCreateInfo->imageType != VK_IMAGE_TYPE_2D || pCreateInfo->mipLevels != 1 ||
+         pCreateInfo->arrayLayers != 1 || pCreateInfo->samples != VK_SAMPLE_COUNT_1_BIT ||
+         pCreateInfo->usage != VK_IMAGE_USAGE_SAMPLED_BIT ||
+         (pCreateInfo->format != VK_FORMAT_R8G8B8A8_UNORM && pCreateInfo->format != VK_FORMAT_R8G8B8A8_SRGB)))
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    VkPs4Image *img = vk_ps4_alloc_zero(alloc, sizeof(*img), 16);
+    if (!img) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    img->type = VK_PS4_OBJ_IMAGE;
+    img->device = dev;
+    img->create_info = *pCreateInfo;
+    img->memory = NULL;
+    img->memory_offset = 0;
+    img->layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    img->is_render_target = false;
+
+    GnmDataFormat gnm_fmt = vk_ps4_vk_format_to_gnm(pCreateInfo->format);
+    GnmGpuMode gpu_mode = GNM_GPU_BASE;
+
+    /* Validate mipLevels — 0 means auto, clamp to 1 */
+    uint32_t mip_levels = pCreateInfo->mipLevels;
+    if (mip_levels == 0) mip_levels = 1;
+
+    /* Validate samples — PS4 supports up to 8x MSAA.
+     * VkSampleCountFlagBits is a bitfield (1,2,4,8,16). */
+    uint32_t samples = pCreateInfo->samples;
+    if (samples == 0) samples = 1;
+    if (samples > 8) samples = 8;  /* clamp to PS4 max */
+
+    if (vk_image_is_color_target(pCreateInfo)) {
+        /* Create as render target */
+        img->is_render_target = true;
+        GnmRenderTargetCreateInfo rt_ci;
+        sceGnmRtInitColorTargetCreateInfo(
+            &rt_ci, gnm_fmt,
+            pCreateInfo->extent.width, pCreateInfo->extent.height,
+            pCreateInfo->arrayLayers,  /* numslices */
+            samples,                   /* numsamples */
+            samples,                   /* numfragments */
+            GNM_TM_DISPLAY_2D_THIN,    /* tilemode */
+            gpu_mode
+        );
+
+        GnmError err = sceGnmCreateRenderTarget(&img->gnm_rt, &rt_ci);
+        if (err != GNM_ERROR_OK) {
+            vk_ps4_free(alloc, img);
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+    } else if (vk_image_is_depth(pCreateInfo)) {
+        /* Depth/stencil target — create a GnmDepthRenderTarget. */
+        img->is_depth_target = true;
+        img->is_render_target = false;
+        memset(&img->gnm_rt, 0, sizeof(img->gnm_rt));
+
+        /* Map VkFormat to GnmZFormat and GnmStencilFormat */
+        GnmZFormat zfmt = GNM_Z_INVALID;
+        GnmStencilFormat sfmt = GNM_STENCIL_INVALID;
+        switch (pCreateInfo->format) {
+        case VK_FORMAT_D16_UNORM:
+            zfmt = GNM_Z_16; sfmt = GNM_STENCIL_INVALID; break;
+        case VK_FORMAT_D32_SFLOAT:
+            zfmt = GNM_Z_32_FLOAT; sfmt = GNM_STENCIL_INVALID; break;
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+            zfmt = GNM_Z_24; sfmt = GNM_STENCIL_8; break;
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+            zfmt = GNM_Z_32_FLOAT; sfmt = GNM_STENCIL_8; break;
+        default:
+            zfmt = GNM_Z_32_FLOAT; sfmt = GNM_STENCIL_INVALID; break;
+        }
+
+        GnmDepthRenderTargetCreateInfo drt_ci;
+        memset(&drt_ci, 0, sizeof(drt_ci));
+        drt_ci.width = pCreateInfo->extent.width;
+        drt_ci.height = pCreateInfo->extent.height;
+        drt_ci.numslices = pCreateInfo->arrayLayers;
+        drt_ci.zfmt = zfmt;
+        drt_ci.stencilfmt = sfmt;
+        drt_ci.tilemodehint = GNM_TM_DEPTH_2D_THIN_128;
+        drt_ci.mingpumode = gpu_mode;
+        drt_ci.numfragments = 1;
+        GnmError err = sceGnmCreateDepthRenderTarget(&img->gnm_drt, &drt_ci);
+        if (err != GNM_ERROR_OK) {
+            /* Fallback: zeroed DRT, use texture path for size calc */
+            memset(&img->gnm_drt, 0, sizeof(img->gnm_drt));
+            img->is_depth_target = false;
+        }
+
+        /* Also initialize a minimal texture descriptor for size calculation
+         * when the DRT creation fails or for sampled depth textures. */
+        GnmTextureCreateInfo tex_ci;
+        memset(&tex_ci, 0, sizeof(tex_ci));
+        tex_ci.format = gnm_fmt;
+        tex_ci.texturetype = vk_image_type_to_gnm(pCreateInfo->imageType);
+        tex_ci.width = pCreateInfo->extent.width;
+        tex_ci.height = pCreateInfo->extent.height;
+        tex_ci.depth = pCreateInfo->extent.depth;
+        tex_ci.nummiplevels = mip_levels;
+        tex_ci.numslices = pCreateInfo->arrayLayers;
+        tex_ci.numfragments = 1;
+        /* Optimal tiling is implementation-defined. Keep R16 VRAM row-linear
+         * so subrect uploads need one DMA run per row, rather than per tile. */
+        tex_ci.tilemodehint = (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR || pCreateInfo->format == VK_FORMAT_R16_UNORM) ? GNM_TM_DISPLAY_LINEAR_ALIGNED : GNM_TM_DISPLAY_2D_THIN;
+        tex_ci.mingpumode = gpu_mode;
+        sceGnmCreateTexture(&img->gnm_texture, &tex_ci);
+    } else {
+        /* Create as texture */
+        GnmTextureCreateInfo tex_ci;
+        memset(&tex_ci, 0, sizeof(tex_ci));
+        tex_ci.format = gnm_fmt;
+        tex_ci.texturetype = vk_image_type_to_gnm(pCreateInfo->imageType);
+        tex_ci.width = pCreateInfo->extent.width;
+        tex_ci.height = pCreateInfo->extent.height;
+        tex_ci.depth = pCreateInfo->extent.depth;
+        tex_ci.nummiplevels = mip_levels;
+        tex_ci.numslices = pCreateInfo->arrayLayers;
+        tex_ci.numfragments = 1;
+        /* Optimal tiling is implementation-defined. Keep R16 VRAM row-linear
+         * so subrect uploads need one DMA run per row, rather than per tile. */
+        tex_ci.tilemodehint = (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR || pCreateInfo->format == VK_FORMAT_R16_UNORM) ? GNM_TM_DISPLAY_LINEAR_ALIGNED : GNM_TM_DISPLAY_2D_THIN;
+        tex_ci.mingpumode = gpu_mode;
+
+        GnmError err = sceGnmCreateTexture(&img->gnm_texture, &tex_ci);
+        if (err != GNM_ERROR_OK) {
+            vk_ps4_free(alloc, img);
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+    }
+
+    *pImage = (VkImage)img;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL
+vk_ps4_DestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks *pAllocator) {
+    if (!device || !image) return;
+    VkPs4Device *dev = (VkPs4Device *)device;
+    VkPs4Image *img = (VkPs4Image *)image;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : &dev->allocator;
+    vk_ps4_free(alloc, img);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+vk_ps4_GetImageMemoryRequirements(VkDevice device, VkImage image, VkMemoryRequirements *pMemoryRequirements) {
+    (void)device;
+    if (!image || !pMemoryRequirements) return;
+    VkPs4Image *img = (VkPs4Image *)image;
+
+    if (img->is_depth_target) {
+        uint64_t size=0; uint32_t align=0;
+        sceGnmDrtCalcByteSize(&size,&align,&img->gnm_drt);
+        pMemoryRequirements->size=size; pMemoryRequirements->alignment=align;
+    } else if (img->is_render_target) {
+        uint64_t size = 0;
+        uint32_t align = 0;
+        sceGnmRtCalcByteSize(&size, &align, &img->gnm_rt);
+        if (size == 0) {
+            /* Fallback for depth targets or unconfigured RTs */
+            GnmDataFormat fmt = vk_ps4_vk_format_to_gnm(img->create_info.format);
+            uint32_t bpp = 4; /* default 4 bytes per pixel */
+            (void)fmt;
+            size = (uint64_t)img->create_info.extent.width *
+                   img->create_info.extent.height * bpp;
+            align = 64;
+        }
+        pMemoryRequirements->size = size;
+        pMemoryRequirements->alignment = align ? align : 64;
+    } else {
+        uint64_t size = 0;
+        uint32_t align = 0;
+        sceGnmTexCalcByteSize(&size, &align, &img->gnm_texture);
+        if (size == 0) {
+            uint32_t bpp = 4;
+            size = (uint64_t)img->create_info.extent.width *
+                   img->create_info.extent.height * bpp;
+            align = 64;
+        }
+        pMemoryRequirements->size = size;
+        pMemoryRequirements->alignment = align ? align : 64;
+    }
+    /* Images prefer Garlic (GPU-local) memory */
+    pMemoryRequirements->memoryTypeBits = (1u << VK_PS4_MEMORY_TYPE_GARLIC) |
+                                          (1u << VK_PS4_MEMORY_TYPE_ONION);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_ps4_BindImageMemory(VkDevice device, VkImage image, VkDeviceMemory memory, VkDeviceSize offset) {
+    if (!device || !image || !memory) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    VkPs4Image *img = (VkPs4Image *)image;
+    VkPs4DeviceMemory *mem = (VkPs4DeviceMemory *)memory;
+
+    img->memory = mem;
+    img->memory_offset = offset;
+
+    if (!mem->gnm_mem.mapped) {
+        /* Cannot bind without a mapping — return error */
+        return VK_ERROR_MEMORY_MAP_FAILED;
+    }
+
+    void *gpu_addr = (char *)mem->gnm_mem.mapped + offset;
+
+    if (img->is_depth_target) {
+        uint64_t stencil_offset=0;
+        sceGnmDrtCalcStencilByteOffset(&stencil_offset,&img->gnm_drt);
+        sceGnmDrtSetZReadAddress(&img->gnm_drt,gpu_addr);
+        sceGnmDrtSetZWriteAddress(&img->gnm_drt,gpu_addr);
+        sceGnmDrtSetStencilReadAddress(&img->gnm_drt,(char *)gpu_addr+stencil_offset);
+        sceGnmDrtSetStencilWriteAddress(&img->gnm_drt,(char *)gpu_addr+stencil_offset);
+    } else if (img->is_render_target) {
+        sceGnmRtSetBaseAddr(&img->gnm_rt, gpu_addr);
+    } else {
+        sceGnmTexSetBaseAddress(&img->gnm_texture, gpu_addr);
+    }
+
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_ps4_CreateImageView(VkDevice device, const VkImageViewCreateInfo *pCreateInfo,
+                       const VkAllocationCallbacks *pAllocator, VkImageView *pImageView) {
+    if (!device || !pCreateInfo || !pImageView) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+
+    VkPs4Device *dev = (VkPs4Device *)device;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : &dev->allocator;
+
+    VkPs4ImageView *view = vk_ps4_alloc_zero(alloc, sizeof(*view), 16);
+    if (!view) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    view->type = VK_PS4_OBJ_IMAGE_VIEW;
+    view->device = dev;
+    view->image = (VkPs4Image *)pCreateInfo->image;
+    if (!view->image) {
+        vk_ps4_free(alloc, view);
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    view->create_info = *pCreateInfo;
+
+    /* For texture images, copy the texture descriptor.
+     * For render target images, build a GnmTexture from the GnmRenderTarget
+     * so the RT can be sampled as a texture (RT-as-texture).
+     * Note: if BindImageMemory hasn't been called yet, the descriptor
+     * has a zero base address. The view must be created after binding
+     * for correct GPU operation. This is a known limitation. */
+    if (!view->image->is_render_target) {
+        view->gnm_view = view->image->gnm_texture;
+    } else {
+        /* Convert the GnmRenderTarget to a GnmTexture descriptor.
+         * We use the RT's actual pixel dimensions (rt->size.width/height)
+         * rather than sceGnmRtBuildInfo's width field, which is the pitch
+         * in pixels — sceGnmTexCreate2d expects the real width and
+         * calculates the pitch internally from width + format. */
+        GnmRenderTarget *rt = &view->image->gnm_rt;
+        GpaTextureInfo rt_info = sceGnmRtBuildInfo(rt);
+        void *rt_base = sceGnmRtGetBaseAddr(rt);
+        uint32_t rt_width = rt->size.width;
+        uint32_t rt_height = rt->size.height;
+        uint64_t tex_size = 0;
+        uint32_t tex_align = 0;
+        GnmError tex_err = sceGnmTexCreate2d(
+            &view->gnm_view, rt_base, rt_info.fmt,
+            rt_width, rt_height, rt_info.nummips,
+            rt_info.tm, rt_info.mingpumode,
+            &tex_size, &tex_align
+        );
+        if (tex_err != GNM_ERROR_OK) {
+            /* Fall back to a zeroed descriptor — the view won't sample
+             * correctly but won't crash. */
+            memset(&view->gnm_view, 0, sizeof(GnmTexture));
+        }
+    }
+
+    *pImageView = (VkImageView)view;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL
+vk_ps4_DestroyImageView(VkDevice device, VkImageView imageView, const VkAllocationCallbacks *pAllocator) {
+    if (!device || !imageView) return;
+    VkPs4Device *dev = (VkPs4Device *)device;
+    VkPs4ImageView *view = (VkPs4ImageView *)imageView;
+    const VkAllocationCallbacks *alloc = pAllocator ? pAllocator : &dev->allocator;
+    vk_ps4_free(alloc, view);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+vk_ps4_GetImageSubresourceLayout(VkDevice device, VkImage image,
+                                 const VkImageSubresource *pSubresource, VkSubresourceLayout *pLayout) {
+    (void)device;
+    (void)pSubresource;
+    if (!image || !pLayout) return;
+    VkPs4Image *img = (VkPs4Image *)image;
+    memset(pLayout, 0, sizeof(*pLayout));
+    /* For linear textures, row pitch = width * bytes_per_pixel */
+    uint32_t bpp = 4;
+    pLayout->offset = 0;
+    pLayout->rowPitch = sceGnmTexGetPitch(&img->gnm_texture) * bpp;
+    pLayout->depthPitch = pLayout->rowPitch * img->create_info.extent.height;
+    pLayout->arrayPitch = pLayout->depthPitch * img->create_info.extent.depth;
+    pLayout->size = pLayout->depthPitch * img->create_info.extent.depth;
+}

@@ -1,0 +1,76 @@
+#pragma once
+
+// C++ <charconv> compat for OpenOrbis libc++ (llvm18).
+// libc++18 has integral to_chars but NOT floating-point to_chars.
+// We provide a fallback using snprintf for floating-point types.
+
+#if __has_include_next(<charconv>)
+#include_next <charconv>
+#endif
+
+#include <cstdio>
+#include <cstring>
+#include <system_error>
+
+namespace std {
+
+// Provide floating-point std::to_chars overloads that libc++18 lacks.
+// These use snprintf internally — not zero-allocation but functional.
+
+inline to_chars_result to_chars(char* first, char* last, float value,
+                                chars_format fmt, int precision)
+{
+    char buf[64];
+    const char* fmt_str = (fmt == chars_format::scientific) ? "%.*e" :
+                          (fmt == chars_format::fixed)      ? "%.*f" :
+                          (fmt == chars_format::hex)        ? "%.*a" : "%.*g";
+    int n = snprintf(buf, sizeof(buf), fmt_str, precision, value);
+    if (n < 0 || first + n > last)
+        return {last, std::errc::value_too_large};
+    std::memcpy(first, buf, n);
+    return {first + n, std::errc{}};
+}
+
+inline to_chars_result to_chars(char* first, char* last, double value,
+                                chars_format fmt, int precision)
+{
+    char buf[64];
+    const char* fmt_str = (fmt == chars_format::scientific) ? "%.*e" :
+                          (fmt == chars_format::fixed)      ? "%.*lf" :
+                          (fmt == chars_format::hex)        ? "%.*la" : "%.*lg";
+    int n = snprintf(buf, sizeof(buf), fmt_str, precision, value);
+    if (n < 0 || first + n > last)
+        return {last, std::errc::value_too_large};
+    std::memcpy(first, buf, n);
+    return {first + n, std::errc{}};
+}
+
+inline to_chars_result to_chars(char* first, char* last, float value,
+                                chars_format fmt)
+{
+    char buf[64];
+    const char* fmt_str = (fmt == chars_format::scientific) ? "%e" :
+                          (fmt == chars_format::fixed)      ? "%f" :
+                          (fmt == chars_format::hex)        ? "%a" : "%g";
+    int n = snprintf(buf, sizeof(buf), fmt_str, value);
+    if (n < 0 || first + n > last)
+        return {last, std::errc::value_too_large};
+    std::memcpy(first, buf, n);
+    return {first + n, std::errc{}};
+}
+
+inline to_chars_result to_chars(char* first, char* last, double value,
+                                chars_format fmt)
+{
+    char buf[64];
+    const char* fmt_str = (fmt == chars_format::scientific) ? "%e" :
+                          (fmt == chars_format::fixed)      ? "%lf" :
+                          (fmt == chars_format::hex)        ? "%la" : "%lg";
+    int n = snprintf(buf, sizeof(buf), fmt_str, value);
+    if (n < 0 || first + n > last)
+        return {last, std::errc::value_too_large};
+    std::memcpy(first, buf, n);
+    return {first + n, std::errc{}};
+}
+
+} // namespace std

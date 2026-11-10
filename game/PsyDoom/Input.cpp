@@ -163,6 +163,8 @@ static void rescanGameControllers() noexcept {
     if (gpJoystick) {
         if (!SDL_JoystickGetAttached(gpJoystick)) {
             closeCurrentGameController();
+        } else {
+            return; // Keep the existing handle; rescans must not open it twice.
         }
     }
 
@@ -173,6 +175,21 @@ static void rescanGameControllers() noexcept {
     for (int joyIdx = 0; joyIdx < numJoysticks; ++joyIdx) {
         // If we find a valid game controller or generic joystick then try to open it.
         // If we succeed then our work is done!
+#if defined(__PS4__)
+        // Map the actual SDK driver's GUID and axis/button ordering. Its GUID
+        // differs from desktop DS4 entries; do not fall back to an unmapped joy.
+        if (!SDL_IsGameController(joyIdx)) {
+        char guid[33], mapping[512];
+        SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(joyIdx), guid, sizeof(guid));
+        SDL_snprintf(mapping, sizeof(mapping),
+            "%s,PsyDoom PS4 pad,a:b0,b:b1,x:b2,y:b3,back:b17,start:b9,"
+            "leftshoulder:b4,rightshoulder:b5,leftstick:b11,rightstick:b12,"
+            "dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,"
+            "leftx:a0,lefty:a1,lefttrigger:a2,rightx:a3,righty:a4,righttrigger:a5,", guid);
+        if (SDL_GameControllerAddMapping(mapping) < 0)
+            FatalErrors::raise("Failed to map the PS4 controller");
+        }
+#endif
         if (SDL_IsGameController(joyIdx)) {
             // This is a game controller - try opening that way
             gpGameController = SDL_GameControllerOpen(joyIdx);
@@ -285,6 +302,9 @@ static void handleSdlEvents() noexcept {
             }   break;
 
             case SDL_MOUSEBUTTONDOWN: {
+#if defined(__PS4__)
+                break; // PS4 input is provided by the controller backend.
+#endif
                 // Capture the mouse on a click if we haven't captured it yet
                 if (!SDL_GetRelativeMouseMode()) {
                     SDL_ShowCursor(SDL_DISABLE);
@@ -348,9 +368,9 @@ static void handleSdlEvents() noexcept {
                         const uint8_t inputIdx = (uint8_t) input;
 
                         // See if there is a change in the 'pressed' status
-                        const bool bPrevPressed = (std::abs(gGamepadInputs[inputIdx]) >= pressedThreshold);
+                        const bool bPrevPressed = (::fabsf(gGamepadInputs[inputIdx]) >= pressedThreshold);
                         const float inputF = sdlAxisValueToFloat(sdlEvent.caxis.value);
-                        const float inputFAbs = std::abs(inputF);
+                        const float inputFAbs = ::fabsf(inputF);
                         const bool bNowPressed = (inputFAbs >= pressedThreshold);
 
                         // Update input value
@@ -378,9 +398,9 @@ static void handleSdlEvents() noexcept {
                     const float pressedThreshold = Config::gAnalogToDigitalThreshold;
                     const uint32_t axis = sdlEvent.jaxis.axis;
 
-                    const bool bPrevPressed = (std::abs(Input::getJoystickAxisValue(axis)) >= pressedThreshold);
+                    const bool bPrevPressed = (::fabsf(Input::getJoystickAxisValue(axis)) >= pressedThreshold);
                     const float inputF = sdlAxisValueToFloat(sdlEvent.jaxis.value);
-                    const float inputFAbs = std::abs(inputF);
+                    const float inputFAbs = ::fabsf(inputF);
                     const bool bNowPressed = (inputFAbs >= pressedThreshold);
 
                     // Update input value
@@ -474,6 +494,10 @@ static void handleSdlEvents() noexcept {
 // Initialize input handling
 //------------------------------------------------------------------------------------------------------------------------------------------
 void init() noexcept {
+#if defined(__PS4__)
+    // VideoOut owns the display; our SDL metadata window has no keyboard focus.
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+#endif
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
         FatalErrors::raise("Failed to initialize the SDL joystick input subsystem!");
     }

@@ -1,0 +1,17 @@
+{
+  "sdk_project": "https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain",
+  "description": "Checksums of the external SDK files used for validation; SDK binaries are not vendored.",
+  "files": {
+    "lib/libSDL2.a": "629c87b4287d6865e5577c5e0086715ff38531b26a90a96237d1362469ebea45",
+    "lib/libc.a": "dd3f25830490bc0aab6a87a1bce890a502e2ec874ac8c3169e37210c4e49aef7",
+    "lib/libc++.a": "9c0ddc37ccba2ab11b2a61a330af941c1bc0c806c8f6fade92db682049836e9a",
+    "lib/libc++abi.a": "1f4b9aae6bbb78f2a175ac82b9fc5089f134299414c7c96aa71ad721ae041d2f",
+    "lib/libunwind.a": "4d4162b86384613d88b63656d9ff2a65bcfdb1bba00a5d8ceaf0d4f7a53f3598",
+    "lib/crt1.o": "4173c4401c0b5d0a72c2641f712982bb38a78e346515278a32fa99d4bbf9dd86",
+    "include/SDL2/SDL_config.h": "274d19d88c3429e10246671bcb0cebc0ef0885241d37592eada33f2d459d81cd",
+    "bin/linux/create-fself": "8787b2f521a0d619a6c350765f1293c08d5145650dd3ca920194e0f8e4897652",
+    "bin/linux/create-gp4": "491d5adab450313ab573a48e5b191add3a12faf54b2602ae59fef1e5bb07073f",
+    "bin/linux/PkgTool.Core": "7a96c138aaa5d36a2c39817c9febd27aafb4d9c64086a75f3672eaff81da8e5f"
+  },
+  "clang": "clang version 23.1.4"
+}

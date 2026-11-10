@@ -120,7 +120,7 @@ static void TI_DrawFire(const bool bUseFinalDoomFirePos, const bool bAdditiveBle
         #if PSYDOOM_VULKAN_RENDERER
             // PsyDoom: make the fire sky support widescreen if this game or mod allows it:
             if (Video::isUsingVulkanRenderPath() && Config::gbVulkanWidescreenEnabled && MapInfo::getGameInfo().bAllowWideTitleScreenFire) {
-                const int32_t extraSpaceAtSides = (int32_t) std::max(std::floor(VRenderer::gPsxCoordsFbX), 0.0f);
+                const int32_t extraSpaceAtSides = (int32_t) std::max<float>(std::floor(VRenderer::gPsxCoordsFbX), 0.0f);
                 const int32_t numExtraPiecesAtSides = std::min((extraSpaceAtSides + SKY_W - 1) / SKY_W, 64);
                 x -= (int16_t)(SKY_W * numExtraPiecesAtSides);
                 numSkyPieces += numExtraPiecesAtSides * 2;

@@ -1,0 +1,26 @@
+#pragma once
+
+// C++20 <memory> compat for OpenOrbis libc++ (llvm18).
+// Adds std::assume_aligned and std::construct_at (C++20 features missing in libc++18).
+
+#if __has_include_next(<memory>)
+#include_next <memory>
+#endif
+
+#if __cplusplus >= 202002L
+namespace std {
+
+template <int N, class T>
+constexpr T* assume_aligned(T* ptr) {
+    static_assert(N == 1 || N == 2 || N == 4 || N == 8 || N == 16 ||
+                  N == 32 || N == 64 || N == 128, "Invalid alignment");
+    return static_cast<T*>(__builtin_assume_aligned(ptr, N));
+}
+
+template <class T, class... Args>
+constexpr T* construct_at(T* p, Args&&... args) {
+    return ::new (static_cast<void*>(p)) T(std::forward<Args>(args)...);
+}
+
+} // namespace std
+#endif

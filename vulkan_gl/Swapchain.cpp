@@ -308,7 +308,11 @@ bool Swapchain::chooseSwapExtent() noexcept {
 
     int windowW = {};
     int windowH = {};
+    #ifdef __PS4__
+    windowW = 1280; windowH = 720;
+    #else
     SDL_Vulkan_GetDrawableSize(pSdlWindow, &windowW, &windowH);
+    #endif
 
     if ((windowW < 0) || (windowH < 0)) {
         ASSERT_FAIL("Invalid window size obtained from SDL!");

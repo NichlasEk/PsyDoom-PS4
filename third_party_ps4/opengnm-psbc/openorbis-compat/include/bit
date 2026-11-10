@@ -1,0 +1,77 @@
+#pragma once
+
+#if __has_include_next(<bit>)
+#include_next <bit>
+#endif
+
+#include <limits>
+#include <type_traits>
+
+// Define __cpp_lib_bit_cast so that rpcs3's own fallback in types.hpp
+// is not activated (it would cause a redefinition).
+#ifndef __cpp_lib_bit_cast
+#define __cpp_lib_bit_cast 201806L
+#endif
+
+namespace std {
+
+#if !defined(_LIBCPP_BIT_CAST)
+template <class To, class From>
+constexpr To bit_cast(const From& value) noexcept {
+    static_assert(sizeof(To) == sizeof(From), "std::bit_cast requires equal sizes");
+    static_assert(is_trivially_copyable_v<To>, "std::bit_cast requires trivially copyable output");
+    static_assert(is_trivially_copyable_v<From>, "std::bit_cast requires trivially copyable input");
+    return __builtin_bit_cast(To, value);
+}
+#endif
+
+namespace __openorbis_bit_compat {
+template <class T>
+constexpr int countl_zero(T value) noexcept {
+    using U = make_unsigned_t<T>;
+    U x = static_cast<U>(value);
+    int count = 0;
+    for (int bit = numeric_limits<U>::digits - 1; bit >= 0; --bit) {
+        if (((x >> bit) & U{1}) != U{0}) {
+            break;
+        }
+        ++count;
+    }
+    return count;
+}
+} // namespace __openorbis_bit_compat
+
+#ifndef __cpp_lib_int_pow2
+template <class T>
+constexpr int bit_width(T value) noexcept {
+    using U = make_unsigned_t<T>;
+    U x = static_cast<U>(value);
+    return x == U{0} ? 0 : numeric_limits<U>::digits - __openorbis_bit_compat::countl_zero(x);
+}
+
+template <class T>
+constexpr bool has_single_bit(T value) noexcept {
+    using U = make_unsigned_t<T>;
+    U x = static_cast<U>(value);
+    return x != U{0} && (x & (x - U{1})) == U{0};
+}
+
+template <class T>
+constexpr T bit_ceil(T value) noexcept {
+    using U = make_unsigned_t<T>;
+    U x = static_cast<U>(value);
+    if (x <= U{1}) {
+        return T{1};
+    }
+    return static_cast<T>(U{1} << bit_width(static_cast<U>(x - U{1})));
+}
+
+template <class T>
+constexpr T bit_floor(T value) noexcept {
+    using U = make_unsigned_t<T>;
+    U x = static_cast<U>(value);
+    return x == U{0} ? T{0} : static_cast<T>(U{1} << (bit_width(x) - 1));
+}
+#endif
+
+} // namespace std

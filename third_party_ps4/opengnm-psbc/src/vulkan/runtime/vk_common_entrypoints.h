@@ -1,0 +1,3 @@
+#ifndef VK_COMMON_ENTRYPOINTS_H
+#define VK_COMMON_ENTRYPOINTS_H
+#endif

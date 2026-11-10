@@ -1,0 +1,509 @@
+#pragma once
+
+#if __has_include_next(<ranges>)
+#include_next <ranges>
+#endif
+
+#include <algorithm>
+#include <functional>
+#include <iterator>
+#include <utility>
+
+namespace std::ranges {
+struct identity {
+    template <class T>
+    constexpr T&& operator()(T&& value) const noexcept {
+        return std::forward<T>(value);
+    }
+};
+
+struct less {
+    template <class Lhs, class Rhs>
+    constexpr bool operator()(Lhs&& lhs, Rhs&& rhs) const {
+        return std::forward<Lhs>(lhs) < std::forward<Rhs>(rhs);
+    }
+};
+
+template <class Range, class T>
+constexpr auto find(Range&& range, const T& value) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    for (; first != last; ++first) {
+        if (*first == value) {
+            break;
+        }
+    }
+    return first;
+}
+
+template <class Range, class T, class Projection>
+constexpr auto find(Range&& range, const T& value, Projection projection) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    for (; first != last; ++first) {
+        if (std::invoke(projection, *first) == value) {
+            break;
+        }
+    }
+    return first;
+}
+
+template <class Range, class Predicate>
+constexpr auto find_if(Range&& range, Predicate predicate) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    for (; first != last; ++first) {
+        if (std::invoke(predicate, *first)) {
+            break;
+        }
+    }
+    return first;
+}
+
+template <class Range, class Predicate>
+constexpr auto find_if_not(Range&& range, Predicate predicate) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    for (; first != last; ++first) {
+        if (!std::invoke(predicate, *first)) {
+            break;
+        }
+    }
+    return first;
+}
+
+template <class Range, class OutputIterator, class UnaryOperation>
+constexpr auto transform(Range&& range, OutputIterator result, UnaryOperation operation) {
+    return std::transform(std::begin(range), std::end(range), result, std::move(operation));
+}
+
+template <class Range, class OutputIterator>
+constexpr auto copy(Range&& range, OutputIterator result) {
+    return std::copy(std::begin(range), std::end(range), result);
+}
+
+template <class Range, class Predicate>
+constexpr auto count_if(Range&& range, Predicate predicate) {
+    typename std::iterator_traits<decltype(std::begin(range))>::difference_type count = 0;
+    for (auto first = std::begin(range), last = std::end(range); first != last; ++first) {
+        if (std::invoke(predicate, *first)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+template <class Range, class T, class Compare = less, class Projection = identity>
+constexpr auto lower_bound(Range&& range, const T& value, Compare compare = {},
+                           Projection projection = {}) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    for (; first != last; ++first) {
+        if (!std::invoke(compare, std::invoke(projection, *first), value)) {
+            break;
+        }
+    }
+    return first;
+}
+
+template <class Range, class Compare = less, class Projection = identity>
+constexpr auto max_element(Range&& range, Compare compare = {}, Projection projection = {}) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    if (first == last) {
+        return last;
+    }
+    auto largest = first;
+    while (++first != last) {
+        if (std::invoke(compare, std::invoke(projection, *largest),
+                        std::invoke(projection, *first))) {
+            largest = first;
+        }
+    }
+    return largest;
+}
+
+template <class Range, class Function>
+constexpr auto for_each(Range&& range, Function function) {
+    for (auto&& item : range) {
+        std::invoke(function, item);
+    }
+    return function;
+}
+
+template <class Range, class T>
+constexpr void fill(Range&& range, const T& value) {
+    std::fill(std::begin(range), std::end(range), value);
+}
+
+template <class Range, class Predicate, class Projection = identity>
+constexpr bool all_of(Range&& range, Predicate predicate, Projection projection = {}) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    for (; first != last; ++first) {
+        if (!std::invoke(predicate, std::invoke(projection, *first))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <class Range, class Predicate, class Projection = identity>
+constexpr bool any_of(Range&& range, Predicate predicate, Projection projection = {}) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    for (; first != last; ++first) {
+        if (std::invoke(predicate, std::invoke(projection, *first))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <class Range, class Predicate, class Projection = identity>
+constexpr bool none_of(Range&& range, Predicate predicate, Projection projection = {}) {
+    return !any_of(std::forward<Range>(range), std::move(predicate), projection);
+}
+
+template <class Range, class Predicate, class Projection>
+constexpr auto adjacent_find(Range&& range, Predicate predicate, Projection projection) {
+    auto first = std::begin(range);
+    const auto last = std::end(range);
+    if (first == last) {
+        return last;
+    }
+    for (auto next = first; ++next != last; first = next) {
+        if (std::invoke(predicate, std::invoke(projection, *first), std::invoke(projection, *next))) {
+            return first;
+        }
+    }
+    return last;
+}
+
+template <class Range>
+constexpr auto sort(Range&& range) {
+    return std::sort(std::begin(range), std::end(range));
+}
+
+template <class Range, class Compare>
+constexpr auto sort(Range&& range, Compare compare) {
+    return std::sort(std::begin(range), std::end(range), std::move(compare));
+}
+
+template <class Range>
+constexpr auto rend(Range&& range) {
+    return std::rend(range);
+}
+
+template <class Range>
+constexpr auto rbegin(Range&& range) {
+    return std::rbegin(range);
+}
+
+template <class Range>
+constexpr auto end(Range&& range) {
+    return std::end(range);
+}
+
+template <class Range>
+constexpr auto begin(Range&& range) {
+    return std::begin(range);
+}
+
+template <class Range>
+constexpr auto size(Range&& range) {
+    return std::size(range);
+}
+
+template <class Range>
+constexpr auto data(Range&& range) {
+    return std::data(range);
+}
+
+template <class T, class Compare = less>
+constexpr const T& clamp(const T& value, const T& low, const T& high, Compare comp = {}) {
+    return std::clamp(value, low, high, comp);
+}
+
+template <class Range, class T>
+constexpr auto fill_n(Range&& range, typename std::iterator_traits<decltype(std::begin(range))>::difference_type n, const T& value) {
+    return std::fill_n(std::begin(range), n, value);
+}
+
+template <class Range, class T>
+constexpr auto count(Range&& range, const T& value) {
+    return std::count(std::begin(range), std::end(range), value);
+}
+
+template <class Range, class OutputIterator>
+constexpr auto move(Range&& range, OutputIterator result) {
+    return std::move(std::begin(range), std::end(range), result);
+}
+
+template <class Range, class T>
+constexpr auto lower_bound(Range&& range, const T& value) {
+    return std::lower_bound(std::begin(range), std::end(range), value);
+}
+
+template <class Range, class T, class Compare>
+constexpr auto upper_bound(Range&& range, const T& value, Compare comp) {
+    return std::upper_bound(std::begin(range), std::end(range), value, comp);
+}
+
+template <class Range, class T>
+constexpr bool contains(Range&& range, const T& value) {
+    return std::find(std::begin(range), std::end(range), value) != std::end(range);
+}
+
+} // namespace std::ranges
+
+// std::views stubs (minimal)
+namespace std::views {
+namespace detail {
+template <class Range>
+struct View {
+    Range range_;
+    auto begin() { return std::begin(range_); }
+    auto end() { return std::end(range_); }
+};
+
+template <class Range>
+struct TakeView {
+    Range range_;
+    std::size_t count_;
+    auto begin() { return std::begin(range_); }
+    auto end() {
+        auto it = std::begin(range_);
+        for (std::size_t i = 0; i < count_ && it != std::end(range_); ++i, ++it) {}
+        return it;
+    }
+};
+
+template <class Range>
+struct ReverseView {
+    Range range_;
+    auto begin() { return std::rbegin(range_); }
+    auto end() { return std::rend(range_); }
+};
+
+template <class Range, class Pred>
+struct FilterView {
+    Range range_;
+    Pred pred_;
+    using InnerIter = decltype(std::begin(std::declval<Range&>()));
+    struct iterator {
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = typename std::iterator_traits<InnerIter>::value_type;
+        using difference_type = typename std::iterator_traits<InnerIter>::difference_type;
+        using pointer = typename std::iterator_traits<InnerIter>::pointer;
+        using reference = typename std::iterator_traits<InnerIter>::reference;
+
+        InnerIter it;
+        InnerIter last;
+        const Pred* pred;
+        iterator& operator++() {
+            ++it;
+            while (it != last && !(*pred)(*it)) ++it;
+            return *this;
+        }
+        reference operator*() const { return *it; }
+        bool operator!=(const iterator& o) const { return it != o.it; }
+        bool operator==(const iterator& o) const { return it == o.it; }
+    };
+    iterator begin() {
+        auto it = std::begin(range_);
+        auto last = std::end(range_);
+        while (it != last && !pred_(*it)) ++it;
+        return {it, last, &pred_};
+    }
+    iterator end() { return {std::end(range_), std::end(range_), &pred_}; }
+};
+
+template <class Range>
+struct JoinView {
+    Range range_;
+    using OuterIter = decltype(std::begin(std::declval<Range&>()));
+    using InnerRange = decltype(*std::begin(std::declval<Range&>()));
+    using InnerIter = decltype(std::begin(std::declval<InnerRange&>()));
+    using InnerRef = decltype(*std::declval<InnerIter&>());
+    struct iterator {
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = std::remove_reference_t<InnerRef>;
+        using difference_type = std::ptrdiff_t;
+        using pointer = std::remove_reference_t<InnerRef>*;
+        using reference = InnerRef;
+
+        OuterIter outer_it;
+        OuterIter outer_last;
+        InnerIter inner_it;
+        InnerIter inner_last;
+        void advance_to_valid() {
+            while (outer_it != outer_last) {
+                inner_it = std::begin(*outer_it);
+                inner_last = std::end(*outer_it);
+                if (inner_it != inner_last) return;
+                ++outer_it;
+            }
+        }
+        iterator& operator++() {
+            ++inner_it;
+            if (inner_it == inner_last) {
+                ++outer_it;
+                advance_to_valid();
+            }
+            return *this;
+        }
+        reference operator*() const { return *inner_it; }
+        bool operator!=(const iterator& o) const {
+            return outer_it != o.outer_it || (outer_it == o.outer_it && inner_it != o.inner_it);
+        }
+        bool operator==(const iterator& o) const {
+            return outer_it == o.outer_it && inner_it == o.inner_it;
+        }
+    };
+    iterator begin() {
+        iterator it{std::begin(range_), std::end(range_), {}, {}};
+        it.advance_to_valid();
+        return it;
+    }
+    iterator end() {
+        return {std::end(range_), std::end(range_), {}, {}};
+    }
+};
+
+template <class Range1, class Range2>
+struct ZipView {
+    Range1 range1_;
+    Range2 range2_;
+    struct iterator {
+        decltype(std::declval<Range1&>().begin()) it1;
+        decltype(std::declval<Range2&>().begin()) it2;
+        auto operator*() {
+            return std::pair<decltype(*it1), decltype(*it2)>(*it1, *it2);
+        }
+        iterator& operator++() { ++it1; ++it2; return *this; }
+        bool operator!=(const iterator& o) const { return it1 != o.it1 && it2 != o.it2; }
+        bool operator==(const iterator& o) const { return it1 == o.it1 || it2 == o.it2; }
+    };
+    iterator begin() { return {range1_.begin(), range2_.begin()}; }
+    iterator end() { return {range1_.end(), range2_.end()}; }
+};
+}
+
+template <class Range>
+auto all(Range&& range) {
+    return detail::View<Range>{std::forward<Range>(range)};
+}
+
+struct _TakeFn {
+    template <class Range>
+    auto operator()(Range&& range, std::size_t n) const {
+        return detail::TakeView<Range>{std::forward<Range>(range), n};
+    }
+    auto operator()(std::size_t n) const {
+        return [n](auto&& range) { return detail::TakeView<decltype(range)>{std::forward<decltype(range)>(range), n}; };
+    }
+};
+inline constexpr _TakeFn take{};
+
+struct _ReverseFn {
+    template <class Range>
+    auto operator()(Range&& range) const {
+        return detail::ReverseView<Range>{std::forward<Range>(range)};
+    }
+    // Curried form: reverse() returns identity adaptor
+    auto operator()() const {
+        return [](auto&& range) { return detail::ReverseView<decltype(range)>{std::forward<decltype(range)>(range)}; };
+    }
+};
+inline constexpr _ReverseFn reverse{};
+
+struct _FilterFn {
+    template <class Range, class Pred>
+    auto operator()(Range&& range, Pred pred) const {
+        return detail::FilterView<Range, Pred>{std::forward<Range>(range), std::move(pred)};
+    }
+    template <class Pred>
+    auto operator()(Pred pred) const {
+        return [pred=std::move(pred)](auto&& range) { return detail::FilterView<decltype(range), Pred>{std::forward<decltype(range)>(range), pred}; };
+    }
+};
+inline constexpr _FilterFn filter{};
+
+struct _JoinFn {
+    template <class Range>
+    auto operator()(Range&& range) const {
+        return detail::JoinView<Range>{std::forward<Range>(range)};
+    }
+    auto operator()() const {
+        return [](auto&& range) { return detail::JoinView<decltype(range)>{std::forward<decltype(range)>(range)}; };
+    }
+};
+inline constexpr _JoinFn join{};
+
+struct _ZipFn {
+    template <class Range1, class Range2>
+    auto operator()(Range1&& r1, Range2&& r2) const {
+        return detail::ZipView<Range1, Range2>{std::forward<Range1>(r1), std::forward<Range2>(r2)};
+    }
+};
+inline constexpr _ZipFn zip{};
+
+} // namespace std::views
+
+// Pipe operator overloads for std::views — constrained to view adaptor types
+// to avoid hijacking operator| for other types (bitflags, enums, etc.)
+template <class Range>
+auto operator|(Range&& range, const std::views::_ReverseFn& fn) {
+    return fn(std::forward<Range>(range));
+}
+
+template <class Range>
+auto operator|(Range&& range, const std::views::_JoinFn& fn) {
+    return fn(std::forward<Range>(range));
+}
+
+// Pipe operator for curried adaptors (lambdas returned by take(n), filter(pred), etc.)
+// Constrained with requires to only match callable types, avoiding hijacking
+// operator| for non-view-adaptor types.
+template <class Range, class Fn>
+requires requires { std::declval<Fn>()(std::declval<Range>()); }
+auto operator|(Range&& range, const Fn& fn) {
+    return fn(std::forward<Range>(range));
+}
+
+// std::shift_left (C++20)
+namespace std {
+template <class ForwardIt>
+constexpr ForwardIt shift_left(ForwardIt first, ForwardIt last,
+                               typename std::iterator_traits<ForwardIt>::difference_type n) {
+    if (n <= 0) return last;
+    auto mid = first;
+    for (auto i = n; i > 0 && mid != last; --i, ++mid) {}
+    if (mid == last) return first;
+    auto dest = first;
+    while (mid != last) {
+        *dest = std::move(*mid);
+        ++dest;
+        ++mid;
+    }
+    return dest;
+}
+
+template <class ForwardIt>
+constexpr ForwardIt shift_right(ForwardIt first, ForwardIt last,
+                                typename std::iterator_traits<ForwardIt>::difference_type n) {
+    if (n <= 0) return first;
+    auto mid = first;
+    for (auto i = n; i > 0 && mid != last; --i, ++mid) {}
+    if (mid == last) return last;
+    auto dest = last;
+    auto src = mid;
+    while (src != last) {
+        --dest;
+        --src;
+        *dest = std::move(*src);
+    }
+    return dest;
+}
+}

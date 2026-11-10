@@ -1,3 +1,6 @@
+#ifdef __PS4__
+#include "videoout_surface.h"
+#endif
 #if PSYDOOM_VULKAN_RENDERER
 
 #include "VideoBackend_Vulkan.h"
@@ -32,6 +35,7 @@ bool VideoBackend_Vulkan::withTempVkInstance(const std::function<void (vgl::Vulk
     ASSERT(doLogic);
 
     // Must be able to load the Vulkan library or have it embedded in the application
+    #ifndef __PS4__
     if (SDL_Vulkan_LoadLibrary(nullptr) != 0)
         return false;
 
@@ -39,6 +43,7 @@ bool VideoBackend_Vulkan::withTempVkInstance(const std::function<void (vgl::Vulk
     if (!SDL_Vulkan_GetVkGetInstanceProcAddr())
         return false;
 
+    #endif
     // Create a temporary (headless) API instance
     vgl::VkFuncs vkFuncs = {};
     const auto pVulkanInstance = std::make_unique<vgl::VulkanInstance>(vkFuncs);
@@ -92,7 +97,11 @@ VideoBackend_Vulkan::~VideoBackend_Vulkan() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 uint32_t VideoBackend_Vulkan::getSdlWindowCreateFlags() noexcept {
     // Want a Vulkan window only
+    #ifdef __PS4__
+    return 0; // SDL owns input/window metadata; ICD owns VideoOut.
+    #else
     return SDL_WINDOW_VULKAN;
+    #endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

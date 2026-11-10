@@ -1,0 +1,3 @@
+#ifndef VK_DISPATCH_TABLE_H
+#define VK_DISPATCH_TABLE_H
+#endif

@@ -1,0 +1,40 @@
+#pragma once
+
+// C++23 <source_location> compat header for OpenOrbis libc++ (llvm18).
+// llvm18 does not provide <source_location>; this minimal implementation
+// uses __builtin_FILE() / __builtin_LINE() which clang supports.
+
+#include <cstdint>
+
+namespace std {
+
+struct source_location {
+private:
+    const char* _file = "";
+    const char* _func = "";
+    uint32_t _line = 0;
+    uint32_t _col = 0;
+
+    constexpr source_location(const char* file, const char* func,
+                              uint32_t line, uint32_t col) noexcept
+        : _file(file), _func(func), _line(line), _col(col) {}
+
+public:
+    constexpr source_location() noexcept = default;
+
+    static constexpr source_location current(
+        const char* file = __builtin_FILE(),
+        const char* func = __builtin_FUNCTION(),
+        uint32_t line = __builtin_LINE(),
+        uint32_t col = __builtin_COLUMN()) noexcept
+    {
+        return source_location(file, func, line, col);
+    }
+
+    constexpr uint32_t line() const noexcept { return _line; }
+    constexpr uint32_t column() const noexcept { return _col; }
+    constexpr const char* file_name() const noexcept { return _file; }
+    constexpr const char* function_name() const noexcept { return _func; }
+};
+
+} // namespace std

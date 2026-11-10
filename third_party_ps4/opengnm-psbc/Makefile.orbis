@@ -1,0 +1,97 @@
+# Makefile.orbis — Build libpsbc.a for PS4 (OpenOrbis cross-compile)
+#
+# Usage:
+#   export OO_PS4_TOOLCHAIN=/path/to/OpenOrbis-PS4-Toolchain
+#   make -f Makefile.orbis
+#
+# This produces libpsbc.orbis.a — the PS4-targeted static library.
+# The host-built libpsbc.a is preserved for the host CLI tool.
+#
+# The generated sources (Python codegen) are shared with the host build.
+# Run `make generated` on the host first if generated sources are missing.
+
+# Tell the main Makefile to provide source lists and code generation only.
+OPENGNM_PSBC_ORBIS := 1
+PSBC :=
+CLI_SRCS :=
+CLI_OBJS :=
+
+# Override output name before including main Makefile (uses ?=)
+LIBPSBC := libpsbc.orbis.a
+
+# Use orbis config
+CONFIG := config.orbis.mak
+
+include Makefile
+
+# Use .orbis.o / .orbis.cpp.o to avoid clobbering host build objects.
+# Cache/log helpers are excluded because they depend on filesystem APIs that
+# are not needed by the shader compiler and are unavailable in OpenOrbis.
+PSBC_OBJS := $(PSBC_SRCS:.c=.orbis.o)
+NIR_OBJS := $(NIR_SRCS:.c=.orbis.o)
+SPIRV_OBJS := $(SPIRV_SRCS:.c=.orbis.o)
+ACO_OBJS := $(ACO_SRCS:.cpp=.orbis.cpp.o)
+AMD_COMMON_OBJS := $(AMD_COMMON_SRCS:.c=.orbis.o)
+AMD_COMMON_NIR_OBJS := $(AMD_COMMON_NIR_SRCS:.c=.orbis.o)
+RADV_OBJS := $(RADV_SRCS:.c=.orbis.o)
+RADV_NIR_OBJS := $(RADV_NIR_SRCS:.c=.orbis.o)
+UTIL_SRCS := $(filter-out \
+	src/util/mesa_cache_db.c \
+	src/util/mesa_cache_db_multipart.c \
+	,$(UTIL_SRCS))
+UTIL_OBJS := $(patsubst %.c,%.orbis.o,$(filter %.c,$(UTIL_SRCS))) $(patsubst %.cpp,%.orbis.cpp.o,$(filter %.cpp,$(UTIL_SRCS)))
+# Build the real format implementation; the format table references it.
+UTIL_FORMAT_OBJS := $(UTIL_FORMAT_SRCS:.c=.orbis.o)
+COMPILER_COMMON_OBJS := $(COMPILER_COMMON_SRCS:.c=.orbis.o)
+BLAKE3_SRCS := $(filter-out src/util/blake3/blake3_neon.c,$(BLAKE3_SRCS))
+BLAKE3_OBJS := $(BLAKE3_SRCS:.c=.orbis.o)
+C11_THREADS_OBJS := $(C11_THREADS_SRCS:.c=.orbis.o)
+VK_RUNTIME_OBJS := $(VK_RUNTIME_SRCS:.c=.orbis.o)
+
+# Rebuild LIBPSBC_OBJS with the overridden .orbis.o extensions
+LIBPSBC_OBJS := \
+	$(PSBC_OBJS) \
+	$(NIR_OBJS) \
+	$(SPIRV_OBJS) \
+	$(ACO_OBJS) \
+	$(AMD_COMMON_OBJS) \
+	$(AMD_COMMON_NIR_OBJS) \
+	$(RADV_OBJS) \
+	$(RADV_NIR_OBJS) \
+	$(UTIL_OBJS) \
+	$(UTIL_FORMAT_OBJS) \
+	$(COMPILER_COMMON_OBJS) \
+	$(BLAKE3_OBJS) \
+	$(C11_THREADS_OBJS) \
+	$(VK_RUNTIME_OBJS)
+
+# Override compile rules for orbis object extensions
+%.orbis.o: %.c | $(GENERATED)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+%.orbis.cpp.o: %.cpp | $(GENERATED)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Provide the public target and archive rule with the .orbis.o prerequisites.
+libpsbc: $(LIBPSBC)
+
+libpsbc.orbis.a: $(LIBPSBC_OBJS)
+	@echo "  AR $@ ($(words $(LIBPSBC_OBJS)) objects)"
+	rm -f $@
+	$(AR) rcs $@ $(LIBPSBC_OBJS)
+
+# Override the default target — only build the static library
+.DEFAULT_GOAL := libpsbc
+all: libpsbc
+
+# Override clean to only remove orbis objects
+clean:
+	find . -name '*.orbis.o' -delete
+	find . -name '*.orbis.cpp.o' -delete
+	rm -f $(LIBPSBC)
+
+# This build includes the portable BLAKE3 implementation, not SIMD objects.
+src/util/blake3/blake3_dispatch.orbis.o: CFLAGS += -DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512 -DBLAKE3_USE_NEON=0
+src/util/blake3/blake3_dispatch.orbis.o: Makefile.orbis
+
+libpsbc/psbc_compile.orbis.o: libpsbc/psbc_compile.h

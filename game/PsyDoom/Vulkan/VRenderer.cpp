@@ -149,7 +149,12 @@ static bool gbDidAcquireSwapImageThisFrame;
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void decideDrawSampleCount() noexcept {
     // Must do at least 1 sample
+#if defined(__PS4__)
+    // The PS4 ICD has no input-attachment support for the MSAA resolve pass.
+    const int32_t wantedNumSamples = 1;
+#else
     const int32_t wantedNumSamples = std::max(Config::gAAMultisamples, 1);
+#endif
 
     // Vulkan specifies up to 64x MSAA currently...
     const VkPhysicalDeviceLimits& deviceLimits = gpPhysicalDevice->getProps().limits;
@@ -286,13 +291,13 @@ static void updateCoordSysInfo() noexcept {
             const float xPixelStretch = (float) Video::ORIG_DRAW_RES_X / gCurLogicalDisplayW;
             const float yPixelStretch = displayedPsxRows / (float) Video::ORIG_DRAW_RES_Y;
 
-            gFramebufferW = (int32_t) std::max(std::ceil((float) gFramebufferW * xPixelStretch), 1.0f);
+            gFramebufferW = (int32_t) std::max<float>(std::ceil((float) gFramebufferW * xPixelStretch), 1.0f);
             gPsxCoordsFbX *= xPixelStretch;
             gPsxCoordsFbW *= xPixelStretch;
             gPsxCoordsFbX = std::ceil(gPsxCoordsFbX);
             gPsxCoordsFbW = std::ceil(gPsxCoordsFbW);
 
-            gFramebufferH = (int32_t) std::max(std::ceil((float) gFramebufferH * yPixelStretch), 1.0f);
+            gFramebufferH = (int32_t) std::max<float>(std::ceil((float) gFramebufferH * yPixelStretch), 1.0f);
             gPsxCoordsFbY *= yPixelStretch;
             gPsxCoordsFbH *= yPixelStretch;
             gPsxCoordsFbY = std::ceil(gPsxCoordsFbY);
@@ -426,7 +431,11 @@ bool isHeadlessPhysicalDeviceSuitable(const vgl::PhysicalDevice& device) noexcep
         return false;
 
     // Check that texture format used for PSX VRAM is supported
+#if defined(__PS4__)
+    constexpr VkFormat R16_UINT_FORMAT = VK_FORMAT_R16_UNORM;
+#else
     constexpr VkFormat R16_UINT_FORMAT = VK_FORMAT_R16_UINT;
+#endif
 
     if (!device.findFirstSupportedTextureFormat(&R16_UINT_FORMAT, 1, VK_IMAGE_TILING_OPTIMAL, 0))
         return false;
@@ -613,7 +622,12 @@ void init() noexcept {
 
     // Initialize the texture representing PSX VRAM and clear it all to black.
     // Note: use the R16 UINT format as we will have to unpack in the shader depending on the PSX texture format being used.
-    if (!gPsxVramTexture.initAs2dTexture(gDevice, VK_FORMAT_R16_UINT, psxGpu.ramPixelW, psxGpu.ramPixelH)) {
+#if defined(__PS4__)
+    constexpr VkFormat vramFormat = VK_FORMAT_R16_UNORM;
+#else
+    constexpr VkFormat vramFormat = VK_FORMAT_R16_UINT;
+#endif
+    if (!gPsxVramTexture.initAs2dTexture(gDevice, vramFormat, psxGpu.ramPixelW, psxGpu.ramPixelH)) {
         FatalErrors::raise(
             "Failed to create a Vulkan texture for PSX VRAM!\n"
             "Set 'DisableVulkanRenderer' to '1' in 'graphics_cfg.ini' as a workaround if this error continues to occur."

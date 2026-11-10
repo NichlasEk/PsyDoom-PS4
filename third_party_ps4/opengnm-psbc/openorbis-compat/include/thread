@@ -1,0 +1,161 @@
+#pragma once
+
+#include_next <thread>
+
+#include <atomic>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+namespace std {
+
+#ifndef __cpp_lib_jthread
+class stop_token;
+
+namespace __openorbis_thread_compat {
+struct stop_state {
+    std::atomic_bool requested{false};
+    std::mutex mutex;
+    std::vector<std::function<void()>> callbacks;
+};
+} // namespace __openorbis_thread_compat
+
+class stop_source {
+public:
+    stop_source() : state{std::make_shared<__openorbis_thread_compat::stop_state>()} {}
+
+    bool request_stop() const noexcept {
+        if (!state) {
+            return false;
+        }
+        bool expected = false;
+        if (!state->requested.compare_exchange_strong(expected, true)) {
+            return false;
+        }
+        std::vector<std::function<void()>> callbacks;
+        {
+            std::lock_guard lock{state->mutex};
+            callbacks = state->callbacks;
+        }
+        for (auto& callback : callbacks) {
+            callback();
+        }
+        return true;
+    }
+
+    [[nodiscard]] stop_token get_token() const noexcept;
+
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return state && state->requested.load();
+    }
+
+private:
+    std::shared_ptr<__openorbis_thread_compat::stop_state> state;
+};
+
+class stop_token {
+public:
+    stop_token() = default;
+
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return state && state->requested.load();
+    }
+
+private:
+    friend class stop_source;
+    template <class Callback>
+    friend class stop_callback;
+
+    explicit stop_token(std::shared_ptr<__openorbis_thread_compat::stop_state> state_)
+        : state{std::move(state_)} {}
+
+    std::shared_ptr<__openorbis_thread_compat::stop_state> state;
+};
+
+inline stop_token stop_source::get_token() const noexcept {
+    return stop_token{state};
+}
+
+template <class Callback>
+class stop_callback {
+public:
+    stop_callback(stop_token token_, Callback callback_) : token{std::move(token_)}, callback{std::move(callback_)} {
+        if (!token.state) {
+            return;
+        }
+        if (token.stop_requested()) {
+            callback();
+            return;
+        }
+        std::lock_guard lock{token.state->mutex};
+        token.state->callbacks.emplace_back(callback);
+    }
+
+    stop_callback(const stop_callback&) = delete;
+    stop_callback& operator=(const stop_callback&) = delete;
+
+private:
+    stop_token token;
+    Callback callback;
+};
+
+template <class Callback>
+stop_callback(stop_token, Callback) -> stop_callback<Callback>;
+
+class jthread {
+public:
+    jthread() noexcept = default;
+
+    template <class Function, class... Args>
+    explicit jthread(Function&& function, Args&&... args) {
+        auto token = source.get_token();
+        if constexpr (std::is_invocable_v<Function, stop_token, Args...>) {
+            thread = std::thread(std::forward<Function>(function), token, std::forward<Args>(args)...);
+        } else {
+            thread = std::thread(std::forward<Function>(function), std::forward<Args>(args)...);
+        }
+    }
+
+    ~jthread() {
+        request_stop();
+        if (joinable()) {
+            join();
+        }
+    }
+
+    jthread(jthread&& other) noexcept = default;
+    jthread& operator=(jthread&& other) noexcept = default;
+
+    jthread(const jthread&) = delete;
+    jthread& operator=(const jthread&) = delete;
+
+    [[nodiscard]] bool joinable() const noexcept {
+        return thread.joinable();
+    }
+
+    void join() {
+        thread.join();
+    }
+
+    void detach() {
+        thread.detach();
+    }
+
+    bool request_stop() noexcept {
+        return source.request_stop();
+    }
+
+    [[nodiscard]] stop_token get_stop_token() const noexcept {
+        return source.get_token();
+    }
+
+private:
+    stop_source source;
+    std::thread thread;
+};
+#endif
+
+} // namespace std

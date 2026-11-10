@@ -1,3 +1,6 @@
+#ifdef __PS4__
+#include "videoout_surface.h"
+#endif
 #include "WindowSurface.h"
 
 #include "Asserts.h"
@@ -48,11 +51,15 @@ bool WindowSurface::init(SDL_Window* const pSdlWindow, VulkanInstance& vulkanIns
     mpSdlWindow = pSdlWindow;
     mpVulkanInstance = &vulkanInstance;
 
+    #ifdef __PS4__
+    mVkSurface = PS4CreateVideoOutSurface(vulkanInstance.getVkInstance());
+    #else
     if (!SDL_Vulkan_CreateSurface(pSdlWindow, vulkanInstance.getVkInstance(), &mVkSurface)) {
         ASSERT_FAIL("Failed to create the window surface!");
         return false;
     }
 
+    #endif
     mbIsValid = true;
     return true;
 }

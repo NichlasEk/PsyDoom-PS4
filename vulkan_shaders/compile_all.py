@@ -12,6 +12,8 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
+PS4 = "--ps4" in sys.argv
 
 # Job-specs for all the files to compile.
 # Corresponds to the 3 arguments of 'compile_shader'
@@ -36,9 +38,12 @@ files_to_compile = [
 # Compiles the input GLSL file to an output file with the specified name.
 # The SPIRV binary code is put into a uint32_t[] array of the specified name and marked as being for the specified shader stage.
 def compile_shader(input_glsl_file, output_c_file, shader_stage, c_var_name):
+    if PS4:
+        output_c_file = output_c_file.replace("compiled/", "compiled_ps4/")
+        Path(output_c_file).parent.mkdir(exist_ok=True)
     # Generate the basic shader code uint32_t array encased in '{}'
     result = subprocess.call(
-        ["glslc", "-I", ".", "--target-env=vulkan1.0", "-fshader-stage=" + shader_stage, "-mfmt=c", "-O", "-o", output_c_file, input_glsl_file]
+        ["glslc", *(["-DPSYDOOM_PS4_UBO=1"] if PS4 else []), "-I", ".", "--target-env=vulkan1.0", "-fshader-stage=" + shader_stage, "-mfmt=c", "-O", "-o", output_c_file, input_glsl_file]
     )
 
     if result != 0:
@@ -52,7 +57,7 @@ def compile_shader(input_glsl_file, output_c_file, shader_stage, c_var_name):
     with open(output_c_file, "w") as file:
         file.write("static const uint32_t ")
         file.write(c_var_name)
-        file.write("[] = \n")
+        file.write("[] =\n")
         file.write(shader_code)
         file.write(";")
 

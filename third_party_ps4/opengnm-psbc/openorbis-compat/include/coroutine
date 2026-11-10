@@ -1,0 +1,112 @@
+#pragma once
+
+// C++20 <coroutine> compat for OpenOrbis libc++ (llvm18).
+// libc++18 does not provide <coroutine> (only experimental, which doesn't
+// work with clang 18 in C++23 mode). This header provides a minimal
+// implementation using clang's built-in coroutine support.
+
+#include <cstddef>
+#include <cstdint>
+
+namespace std {
+
+// Forward declarations
+template <class Promise = void>
+class coroutine_handle;
+
+template <>
+class coroutine_handle<void> {
+public:
+    coroutine_handle() noexcept = default;
+    coroutine_handle(nullptr_t) noexcept {}
+
+    void operator()() const { resume(); }
+    void resume() const { __builtin_coro_resume(ptr_); }
+    void destroy() const { __builtin_coro_destroy(ptr_); }
+    bool done() const { return __builtin_coro_done(ptr_); }
+
+    void* address() const noexcept { return ptr_; }
+    static coroutine_handle from_address(void* addr) noexcept {
+        coroutine_handle h;
+        h.ptr_ = addr;
+        return h;
+    }
+
+    explicit operator bool() const noexcept { return ptr_ != nullptr; }
+
+protected:
+    void* ptr_ = nullptr;
+};
+
+template <class Promise>
+class coroutine_handle {
+public:
+    coroutine_handle() noexcept = default;
+    coroutine_handle(nullptr_t) noexcept {}
+
+    void operator()() const { resume(); }
+    void resume() const { __builtin_coro_resume(ptr_); }
+    void destroy() const { __builtin_coro_destroy(ptr_); }
+    bool done() const { return __builtin_coro_done(ptr_); }
+
+    Promise& promise() const {
+        return *reinterpret_cast<Promise*>(
+            __builtin_coro_promise(ptr_, alignof(Promise), false));
+    }
+
+    void* address() const noexcept { return ptr_; }
+    static coroutine_handle from_address(void* addr) noexcept {
+        coroutine_handle h;
+        h.ptr_ = addr;
+        return h;
+    }
+    static coroutine_handle from_promise(Promise& p) noexcept {
+        coroutine_handle h;
+        h.ptr_ = __builtin_coro_promise(&p, alignof(Promise), true);
+        return h;
+    }
+
+    explicit operator bool() const noexcept { return ptr_ != nullptr; }
+
+    // Implicit conversion to void handle
+    operator coroutine_handle<void>() const noexcept {
+        return coroutine_handle<void>::from_address(ptr_);
+    }
+
+protected:
+    void* ptr_ = nullptr;
+};
+
+struct suspend_always {
+    bool await_ready() noexcept { return false; }
+    void await_suspend(coroutine_handle<>) noexcept {}
+    void await_resume() noexcept {}
+};
+
+struct suspend_never {
+    bool await_ready() noexcept { return true; }
+    void await_suspend(coroutine_handle<>) noexcept {}
+    void await_resume() noexcept {}
+};
+
+// noop_coroutine (minimal stub)
+struct noop_coroutine_handle : coroutine_handle<void> {
+    explicit operator bool() const noexcept { return true; }
+};
+
+inline noop_coroutine_handle noop_coroutine() noexcept {
+    return {};
+}
+
+// coroutine_traits
+template <class Ret, class... Args>
+struct coroutine_traits {
+    using promise_type = typename Ret::promise_type;
+};
+
+} // namespace std
+
+// Enable clang coroutine support
+#ifndef __cpp_impl_coroutine
+#define __cpp_impl_coroutine 201902L
+#endif

@@ -152,7 +152,9 @@ void VideoBackend_SDL::displayExternalSurface(
     SDL_Texture* const pSdlTexture = sdlSurface.getTexture();
 
     if (pSdlTexture) {
+        #if SDL_VERSION_ATLEAST(2, 0, 12)
         SDL_SetTextureScaleMode(pSdlTexture, (bUseFiltering) ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+        #endif
         SDL_RenderCopy(mpRenderer, pSdlTexture, &srcRect, &dstRect);
     }
 
