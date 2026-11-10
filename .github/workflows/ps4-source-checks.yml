@@ -1,0 +1,25 @@
+name: PS4 source checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  host-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify vendored source hashes
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path('third_party_ps4')
+          for name,expected in json.loads((root/'sources.lock.json').read_text())['files'].items():
+              assert hashlib.sha256((root/name).read_bytes()).hexdigest()==expected, name
+          PY
+      - name: Check Python scripts
+        run: python3 -m compileall -q scripts/ps4 ps4/tests
+      - name: Test CUE search order and missing resources
+        run: python3 ps4/tests/check_disc_search.py
+      - name: Test halfword DMA packet encoding and bounds
+        run: python3 ps4/tests/check_dma.py
