@@ -34,6 +34,14 @@ other `.cue` names are supported. Unusable disc descriptions are skipped.
 Leave USB connected while playing. Configuration, saves and logs stay under
 `/data/psydoom` on HDD. See [installation details](ps4/INSTALL-0.02.txt).
 
+## Screenshots
+
+Captured in shadPS4; physical PS4 firmware 13.52 support is separately user-reported.
+
+![PsyDoom PS4 running in shadPS4](docs/screenshots/psydoom-ps4-shadps4-04.png)
+
+[View all four screenshots](docs/screenshots/README.md).
+
 ## Controls
 
 | Action | PS4 controller | shadPS4 default keyboard |
