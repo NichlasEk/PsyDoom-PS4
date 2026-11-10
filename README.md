@@ -9,10 +9,13 @@ history are preserved; see [upstream documentation](README.upstream.md) and
 
 ## Status
 
-Gameplay, keyboard-to-controller input and normal game timing have been tested
-in shadPS4. **Physical PS4 testing is pending.** Emulator results do not establish
-console compatibility. The source includes later packaging/resource-search
-changes; each release documents its own test status.
+**Version 0.02 is reported working on a physical PS4 running firmware 13.52
+by a community user.** This report does not establish compatibility with other
+firmware versions. Gameplay, keyboard-to-controller input and normal game
+timing have also been tested in shadPS4.
+
+Download the [latest release](https://github.com/NichlasEk/PsyDoom-PS4/releases/latest),
+including the ready-to-install PKG and SHA-256 checksum.
 
 Game disc data is not included. Use your own supported PlayStation Doom disc
 image. This is an unofficial port, not an id Software or Sony product.
