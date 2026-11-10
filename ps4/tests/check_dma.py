@@ -34,7 +34,7 @@ int main(void) {
  return 0;
 }
 '''
-with tempfile.TemporaryDirectory(dir=root/'build') as tmp:
+with tempfile.TemporaryDirectory(prefix='psydoom-dma-') as tmp:
  p=Path(tmp);(p/'test.c').write_text(pre+source[a:b]+test)
  subprocess.run(['cc','-std=c11','-I'+str(root/'third_party_ps4/opengnm/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
  subprocess.run([str(p/'test')],check=True)
