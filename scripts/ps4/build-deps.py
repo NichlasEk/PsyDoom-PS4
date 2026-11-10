@@ -24,6 +24,9 @@ for name in manifest['components']:
 env=dict(os.environ,OO_PS4_TOOLCHAIN=str(sdk));jobs=os.environ.get('BUILD_JOBS','2')
 def run(args,folder):subprocess.run(args,cwd=native/folder,env=env,check=True)
 run(['make','lib','CC=clang','AR=llvm-ar'], 'opengnm')
+# The Makefile expands source wildcards before building generated targets.
+# Complete generation in a separate invocation so new C files enter the archive.
+run(['make','-f','Makefile.orbis','generated'], 'opengnm-psbc')
 run(['make','-f','Makefile.orbis','-j'+jobs], 'opengnm-psbc')
 run(['make','-f','Makefile.orbis','-j'+jobs,'libvulkan_ps4.a'], 'vulkan-ps4')
 stamp.write_text(fingerprint)
